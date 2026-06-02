@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Layers, Newspaper, PenTool, Settings, Moon, Sun, BookA, ChevronLeft, Languages } from 'lucide-react';
+import { Home, Layers, Newspaper, PenTool, Settings, Moon, Sun, BookA, ChevronLeft, Languages, Wand2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppStore } from '../store/useAppStore';
 import { Logo } from './Logo';
@@ -8,7 +8,9 @@ import { translations } from '../lib/i18n';
 
 export function Navigation() {
   const location = useLocation();
-  const { hasConfigured, activeProvider, language } = useAppStore();
+  const { hasConfigured, activeProviderId, providers, language } = useAppStore();
+  const activeProvider = providers && Array.isArray(providers) ? providers.find(p => p.id === activeProviderId) : null;
+  const activeProviderName = activeProvider ? activeProvider.name : 'LLM';
   const t = translations[language];
 
   const links = [
@@ -59,7 +61,7 @@ export function Navigation() {
         
         <div className="mt-auto p-4 bg-gradient-to-tr from-blue-500 to-blue-400 dark:from-blue-600 dark:to-blue-500 rounded-3xl text-white shadow-md shadow-blue-500/20 dark:shadow-none">
           <p className="text-xs opacity-80 uppercase tracking-widest mb-1">Provider Status</p>
-          <p className="font-bold truncate text-sm" title={activeProvider}>{activeProvider === 'gemini' ? 'Gemini Connected' : `${activeProvider} Connected`}</p>
+          <p className="font-bold truncate text-sm" title={activeProviderName}>{activeProviderName} Connected</p>
           <div className="mt-3 bg-white/20 h-1.5 rounded-full overflow-hidden">
             <div className="bg-white w-3/4 h-full rounded-full"></div>
           </div>
@@ -70,7 +72,7 @@ export function Navigation() {
 }
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const { hasConfigured, theme, toggleTheme, language, setLanguage } = useAppStore();
+  const { hasConfigured, theme, language, setLanguage, isAssistantOpen, toggleAssistant } = useAppStore();
   const location = useLocation();
   const navigate = useNavigate();
   const t = translations[language];
@@ -84,12 +86,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
   };
 
   const isHome = location.pathname === '/';
+  const showHeader = hasConfigured;
 
   return (
     <div className="flex w-full h-[100dvh] bg-gradient-to-br from-[#F0F7FF] via-[#FFFFFF] to-[#E6F0FF] dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 font-sans text-slate-800 dark:text-slate-200 overflow-hidden relative">
       <Navigation />
-      <main className="flex-1 flex flex-col h-[100dvh] overflow-y-auto w-full p-4 md:p-8 gap-4 md:gap-6 relative z-0">
-        {hasConfigured && (
+      <main className="flex-1 flex flex-col h-[100dvh] overflow-x-hidden overflow-y-auto min-w-0 w-full p-4 md:p-8 gap-4 md:gap-6 relative z-0">
+        {showHeader && (
           <header className="flex justify-between items-center mb-0 md:mb-2 bg-white/40 dark:bg-slate-900/40 md:bg-transparent backdrop-blur-sm md:backdrop-blur-none p-3 md:p-0 rounded-2xl md:rounded-none">
             <div className="flex items-center gap-2">
               {!isHome && (
@@ -122,8 +125,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <button onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')} className="p-2 rounded-xl text-slate-400 dark:text-slate-500 hover:bg-white/50 dark:hover:bg-slate-800/50 transition-colors" title="Toggle Language">
                 <Languages size={20} />
               </button>
-              <button onClick={toggleTheme} className="p-2 rounded-xl text-slate-400 dark:text-slate-500 hover:bg-white/50 dark:hover:bg-slate-800/50 transition-colors" title={theme === 'dark' ? t.themeLight : t.themeDark}>
-                {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+              <button 
+                onClick={toggleAssistant} 
+                className={cn(
+                  "p-2 rounded-xl transition-colors", 
+                  isAssistantOpen ? "bg-blue-100/50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-slate-500 hover:bg-white/50 dark:hover:bg-slate-800/50"
+                )} 
+                title="AI Assistant"
+              >
+                <Wand2 size={20} />
               </button>
               <Link to="/setup" className="md:hidden p-2 rounded-xl text-slate-400 dark:text-slate-500 hover:bg-white/50 dark:hover:bg-slate-800/50 transition-colors" title={t.setup}>
                 <Settings size={20} />

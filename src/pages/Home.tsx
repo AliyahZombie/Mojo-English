@@ -1,11 +1,12 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Flame, Clock, Glasses, Target, Layers, Newspaper, PenTool } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppStore } from '../store/useAppStore';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { translations } from '../lib/i18n';
+import { ChatAssistant } from '../components/ChatAssistant';
 
 function StatCard({ 
   title, value, subtitle, icon: Icon, colorClass 
@@ -31,35 +32,73 @@ function StatCard({
   );
 }
 
+import { useFsrsStore } from '../store/useFsrsStore';
+
 export function Home() {
-  const dailyGoal = useAppStore(state => state.dailyGoal);
-  const language = useAppStore(state => state.language);
+  const { dailyGoal, language, isAssistantOpen, toggleAssistant } = useAppStore();
+  const { getDailyStudiedCount, dailyStats } = useFsrsStore();
   const t = translations[language];
+  const studiedToday = getDailyStudiedCount();
   
   const randomQuote = useMemo(() => {
     const quotes = t.quotes;
     return quotes[Math.floor(Math.random() * quotes.length)];
   }, [t.quotes]);
 
+  const streakCount = useMemo(() => {
+    let streak = 0;
+    const statsDateKeys = Object.keys(dailyStats);
+    if (statsDateKeys.length === 0) return 0;
+    
+    // go backwards
+    for (let i = 0; i < 365; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const dateStr = d.toISOString().split('T')[0];
+        if (dailyStats[dateStr]?.studiedCount > 0) {
+            streak++;
+        } else if (i > 0) {
+            // gap found, unless it's today and today is 0 (we haven't studied yet but streak from yesterday is active)
+            break;
+        }
+    }
+    return streak;
+  }, [dailyStats]);
+  
   const MOCK_CHART_DATA = useMemo(() => {
     const daysEn = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const daysZh = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
     const days = language === 'en' ? daysEn : daysZh;
-    const values = [12, 15, 10, 8, 18, 20, 25];
     
-    return days.map((day, i) => ({
-      name: day,
-      words: values[i]
-    }));
-  }, [language]);
+    // Get last 7 days stats
+    const chartData = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dayIndex = d.getDay() === 0 ? 6 : d.getDay() - 1; // 0=Sun->6, 1=Mon->0
+      const dateStr = d.toISOString().split('T')[0];
+      const count = dailyStats[dateStr]?.studiedCount || 0;
+      
+      chartData.push({
+        name: days[dayIndex],
+        words: count,
+        fullDate: dateStr
+      });
+    }
+    return chartData;
+  }, [language, dailyStats]);
 
   return (
-    <motion.div 
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="w-full flex flex-col pb-8"
-    >
-      <header className="mb-6 shrink-0">
+    <div className="w-full h-full flex gap-6 relative">
+      <motion.div 
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className={cn(
+          "flex-1 flex flex-col pb-8 transition-all duration-300 mx-auto",
+          isAssistantOpen ? "max-w-3xl" : "w-full"
+        )}
+      >
+        <header className="mb-6 shrink-0">
         <h1 className="text-3xl font-bold mb-1 tracking-tight text-slate-800 dark:text-slate-200 transition-colors">{t.yourProgress}</h1>
         <p className="text-slate-500 dark:text-slate-400 text-sm transition-colors">{randomQuote}</p>
       </header>
@@ -77,7 +116,7 @@ export function Home() {
           </div>
           <div className="mt-auto">
             <div className="flex items-end gap-2">
-              <div className="text-2xl md:text-3xl font-bold text-slate-700 dark:text-slate-200 tracking-tight transition-colors">18</div>
+              <div className="text-2xl md:text-3xl font-bold text-slate-700 dark:text-slate-200 tracking-tight transition-colors">{studiedToday}</div>
               <div className="text-sm font-medium text-slate-400 dark:text-slate-500 mb-0.5 md:mb-1">/ {dailyGoal}</div>
             </div>
             <div className="mt-1 md:mt-2 text-xs md:text-sm font-bold text-blue-600 dark:text-blue-500 flex items-center gap-1 group-hover:gap-2 transition-all">
@@ -87,21 +126,21 @@ export function Home() {
         </Link>
         <StatCard 
           title={t.streak} 
-          value={`14 ${t.days}`} 
-          subtitle={`${t.best}: 21 ${t.days}`}
+          value={`${streakCount} ${t.days}`} 
+          subtitle={`${t.best}: ${streakCount} ${t.days}`}
           icon={Flame}
           colorClass="bg-orange-50 dark:bg-orange-900/40 text-orange-600 dark:text-orange-400"
         />
         <StatCard 
           title={t.studyTime} 
-          value="45m" 
+          value={`${Math.ceil(studiedToday * 1.5)}m`} 
           subtitle={t.today}
           icon={Clock}
           colorClass="bg-purple-50 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400"
         />
         <StatCard 
           title={t.wordsRead} 
-          value="1,200" 
+          value={(studiedToday).toString()} 
           subtitle={t.today}
           icon={Glasses}
           colorClass="bg-emerald-50 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400"
@@ -150,5 +189,57 @@ export function Home() {
         </div>
       </div>
     </motion.div>
+
+    {/* Desktop Assistant */}
+    <AnimatePresence>
+      {isAssistantOpen && (
+        <motion.div
+          initial={{ opacity: 0, x: 50 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: 50, transition: { duration: 0.2 } }}
+          className="hidden xl:flex w-80 lg:w-96 shrink-0 flex-col h-[calc(100vh-6rem)] sticky top-4 max-h-[800px]"
+        >
+          <ChatAssistant 
+            contextId="home_dashboard"
+            title="Dashboard Assistant"
+            description="Ask me about your progress"
+            className="h-full shadow-sm"
+            onClose={toggleAssistant}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
+
+    {/* Mobile Chat / Discussion Drawer */}
+    <AnimatePresence>
+      {isAssistantOpen && (
+        <>
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-slate-900/20 dark:bg-black/40 z-40 backdrop-blur-sm xl:hidden"
+            onClick={toggleAssistant}
+          />
+          <motion.div
+            initial={{ y: '100%' }}
+            animate={{ y: 0 }}
+            exit={{ y: '100%' }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className="fixed left-0 right-0 bottom-0 h-[80vh] z-50 rounded-t-3xl border-t border-slate-100 dark:border-slate-800 flex flex-col xl:hidden bg-white dark:bg-slate-900 shadow-[0_-10px_40px_rgba(0,0,0,0.1)]"
+          >
+             <ChatAssistant 
+                contextId="home_dashboard"
+                title="Dashboard Assistant"
+                description="Ask me about your progress"
+                onClose={toggleAssistant}
+                className="rounded-none border-none shadow-none h-full"
+                isEmbedded={true}
+              />
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
+  </div>
   );
 }

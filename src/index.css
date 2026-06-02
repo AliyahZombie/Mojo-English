@@ -41,6 +41,8 @@
     color: var(--foreground);
     background-image: linear-gradient(to bottom right, #ffffff, #eff6ff);
     background-attachment: fixed;
+    overflow-x: hidden;
+    width: 100vw;
   }
   
   .dark body {
@@ -64,4 +66,18 @@
       padding-bottom: 24px !important;
     }
   }
+}
+
+@keyframes marquee {
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-50%); }
+}
+
+.animate-marquee {
+  animation: marquee var(--marquee-duration, 5s) linear infinite;
+}
+
+.mask-edge {
+  mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
 }

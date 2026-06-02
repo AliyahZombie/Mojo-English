@@ -1,10 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, Loader2 } from 'lucide-react';
+import { Search, Loader2, Sparkles } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { cn } from '../lib/utils';
 import { WordCard, WordDetail } from '../components/WordCard';
 import { searchDictionary } from '../services/dictionaryApi';
+import { ChatAssistant } from '../components/ChatAssistant';
+import { useAppStore } from '../store/useAppStore';
+import { translations } from '../lib/i18n';
 
 export function Dictionary() {
+  const { isAssistantOpen, toggleAssistant, language } = useAppStore();
+  const t = translations[language];
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQuery = searchParams.get('q') || '';
   
@@ -20,14 +27,14 @@ export function Dictionary() {
     }
   }, []);
 
-  const performSearch = async (searchTerm: string) => {
+  const performSearch = async (searchTerm: string, forceAi: boolean = false) => {
     if (!searchTerm.trim()) return;
 
     setIsLoading(true);
     setError('');
     
     try {
-      const res = await searchDictionary(searchTerm);
+      const res = await searchDictionary(searchTerm, { forceAi });
       if (res) {
         setResult(res);
         setSearchWord(res.word);
@@ -52,8 +59,12 @@ export function Dictionary() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto w-full flex flex-col pt-4 pb-8 md:py-8 items-center h-full">
-      <header className="w-full mb-6 shrink-0">
+    <div className="w-full h-full flex gap-6 relative transition-all duration-300">
+      <div className={cn(
+        "flex-1 flex flex-col pt-4 pb-8 md:py-8 items-center transition-all duration-300 mx-auto",
+        isAssistantOpen ? "max-w-2xl" : "max-w-4xl"
+      )}>
+        <header className="w-full mb-6 shrink-0">
         <h1 className="text-2xl md:text-3xl font-bold mb-4 text-slate-800 dark:text-slate-200 transition-colors text-center">Dictionary</h1>
         
         <form onSubmit={handleSearch} className="relative max-w-2xl mx-auto w-full group">
@@ -63,7 +74,7 @@ export function Dictionary() {
           <input
             type="text"
             className="w-full bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-800 focus:border-blue-500 dark:focus:border-blue-500 rounded-2xl py-3 pl-12 pr-12 text-lg text-slate-800 dark:text-slate-200 outline-none transition-all shadow-sm"
-            placeholder="Search for a word..."
+            placeholder={t.searchPlaceholder || "Search for a word..."}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -78,19 +89,82 @@ export function Dictionary() {
       <div className="w-full flex-1 overflow-y-auto hide-scrollbar flex flex-col items-center">
         {error ? (
           <div className="flex flex-col items-center justify-center h-48 bg-slate-50 dark:bg-slate-900/50 w-full rounded-3xl border border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400">
-            <p>{error}</p>
+            <p>{t.noResult || error}</p>
           </div>
         ) : result ? (
-          <div className="w-full max-w-4xl pb-10">
+          <div className="w-full max-w-4xl pb-10 flex flex-col items-center">
             <WordCard word={result} isShowAnswer={true} />
+            <button 
+              onClick={() => performSearch(searchWord, true)}
+              disabled={isLoading}
+              className="mt-6 px-6 py-2.5 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium text-sm transition-colors flex items-center gap-2"
+            >
+              <Sparkles size={16} className="text-blue-500" />
+              {t.regenerate || 'Regenerate via AI'}
+            </button>
           </div>
         ) : !isLoading && searchWord === '' ? (
-          <div className="flex flex-col items-center justify-center h-64 opacity-50 select-none">
+          <div className="flex flex-col items-center justify-center h-64 opacity-50 select-none text-center">
             <Search size={48} className="text-slate-300 dark:text-slate-700 mb-4" />
-            <p className="text-slate-500 dark:text-slate-400">Enter a word to see its translation and frequency.</p>
+            <p className="text-slate-500 dark:text-slate-400 max-w-sm">
+              {language === 'zh' ? '输入单词查看翻译和频率。' : 'Enter a word to see its translation and frequency.'}
+            </p>
           </div>
         ) : null}
-      </div>
+      </div></div>
+
+      {/* Desktop Assistant */}
+      <AnimatePresence>
+        {isAssistantOpen && result && (
+          <motion.div
+            initial={{ opacity: 0, x: 50 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 50, transition: { duration: 0.2 } }}
+            className="hidden lg:flex w-80 xl:w-96 shrink-0 flex-col h-[calc(100%-2.5rem)] my-auto"
+          >
+            <ChatAssistant 
+              contextId={`dict_${result.word}`}
+              title="Dictionary Assistant"
+              description={`Discuss the word "${result.word}"`}
+              systemContext={`The user is looking at the dictionary entry for "${result.word}". Details: ${JSON.stringify(result)}`}
+              onClose={toggleAssistant}
+              className="h-full"
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Mobile Chat / Discussion Drawer */}
+      <AnimatePresence>
+        {isAssistantOpen && result && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-slate-900/20 dark:bg-black/40 z-40 backdrop-blur-sm lg:hidden"
+              onClick={toggleAssistant}
+            />
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="fixed left-0 right-0 bottom-0 h-[80vh] z-50 rounded-t-3xl border-t border-slate-100 dark:border-slate-800 flex flex-col lg:hidden bg-white dark:bg-slate-900 shadow-[0_-10px_40px_rgba(0,0,0,0.1)]"
+            >
+               <ChatAssistant 
+                  contextId={`dict_${result.word}`}
+                  title="Dictionary Assistant"
+                  description={`Discuss the word "${result.word}"`}
+                  systemContext={`The user is looking at the dictionary entry for "${result.word}". Details: ${JSON.stringify(result)}`}
+                  onClose={toggleAssistant}
+                  className="rounded-none border-none shadow-none h-full"
+                  isEmbedded={true}
+                />
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

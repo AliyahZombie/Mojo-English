@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, CheckCircle2, ChevronLeft, Search, BookA } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, Search, BookA, Send } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '../lib/utils';
+import { ChatAssistant } from '../components/ChatAssistant';
+import { useAppStore } from '../store/useAppStore';
 
 const MOCK_NEWS = [
   {
@@ -68,6 +70,7 @@ const MOCK_NEWS = [
 ];
 
 export function News() {
+  const { isAssistantOpen, toggleAssistant } = useAppStore();
   const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
   
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
@@ -303,7 +306,59 @@ export function News() {
                 </div>
               </div>
             </div>
+            
+            {/* Desktop Assistant */}
+            <AnimatePresence>
+              {isAssistantOpen && (
+                <motion.div
+                  initial={{ opacity: 0, x: 50 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 50, transition: { duration: 0.2 } }}
+                  className="hidden xl:flex w-80 lg:w-96 shrink-0 flex-col h-full sticky top-4 max-h-[calc(100vh-2rem)]"
+                >
+                  <ChatAssistant 
+                    contextId={`news_${selectedArticleId}`}
+                    title="Article Assistant"
+                    description="Discuss this article"
+                    systemContext={`The user is reading an article titled "${selectedArticle?.title}". Full text:\n\n${selectedArticle?.paragraphs.join('\n\n')}`}
+                    className="h-[600px] shadow-sm"
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Mobile Chat / Discussion Drawer */}
+      <AnimatePresence>
+        {selectedArticleId && isAssistantOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-slate-900/20 dark:bg-black/40 z-40 backdrop-blur-sm xl:hidden"
+              onClick={toggleAssistant}
+            />
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="fixed left-0 right-0 bottom-0 h-[80vh] z-50 rounded-t-3xl border-t border-slate-100 dark:border-slate-800 flex flex-col xl:hidden bg-white dark:bg-slate-900 shadow-[0_-10px_40px_rgba(0,0,0,0.1)]"
+            >
+               <ChatAssistant 
+                  contextId={`news_${selectedArticleId}`}
+                  title="Article Assistant"
+                  description="Discuss this article"
+                  systemContext={`The user is reading an article titled "${selectedArticle?.title}". Full text:\n\n${selectedArticle?.paragraphs.join('\n\n')}`}
+                  onClose={toggleAssistant}
+                  className="rounded-none border-none shadow-none h-full"
+                  isEmbedded={true}
+                />
+            </motion.div>
+          </>
         )}
       </AnimatePresence>
 

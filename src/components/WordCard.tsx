@@ -1,6 +1,9 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Volume2, BookmarkPlus, Sparkles, ArrowRightLeft, Quote } from 'lucide-react';
+import { Volume2, BookmarkPlus, Sparkles, ArrowRightLeft, Quote, Bot, BookOpen } from 'lucide-react';
+
+import { useAppStore } from '../store/useAppStore';
+import { translations } from '../lib/i18n';
 
 export interface WordDetail {
   id: string;
@@ -48,6 +51,8 @@ interface WordCardProps {
 }
 
 export function WordCard({ word, isShowAnswer }: WordCardProps) {
+  const { language } = useAppStore();
+  const t = translations[language];
   const [audioError, setAudioError] = React.useState<string>('');
 
   const handlePlayAudio = (type: 1 | 2 = 1, e?: React.MouseEvent) => {
@@ -77,6 +82,17 @@ export function WordCard({ word, isShowAnswer }: WordCardProps) {
         className="w-full bg-white dark:bg-slate-900 rounded-[32px] md:rounded-[40px] p-6 md:p-8 shadow-sm border border-blue-50 dark:border-slate-800 flex flex-col transition-colors min-h-[400px]"
       >
         <div className="absolute top-0 right-0 p-6 md:p-8 flex items-center gap-2">
+           {word.id.startsWith('ai-') ? (
+             <div className="flex items-center gap-1 px-2 py-1 bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400 rounded text-[10px] md:text-xs font-bold uppercase transition-colors shrink-0">
+               <Bot size={12} />
+               <span>{t.aiGenerated || 'AI Generated'}</span>
+             </div>
+           ) : word.id.startsWith('dict-') ? (
+             <div className="flex items-center gap-1 px-2 py-1 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 rounded text-[10px] md:text-xs font-bold uppercase transition-colors shrink-0">
+               <BookOpen size={12} />
+               <span>{t.ecdictLocal || 'ECDICT'}</span>
+             </div>
+           ) : null}
            {word.oxford === 1 && (
              <span className="px-2 py-0.5 bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400 rounded text-[10px] md:text-xs font-bold uppercase transition-colors shrink-0">Oxford</span>
            )}

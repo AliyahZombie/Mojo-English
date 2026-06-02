@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/Layout';
+import { GlobalAlert } from './components/GlobalAlert';
 import { Home } from './pages/Home';
 import { Setup } from './pages/Setup';
 import { Words } from './pages/Words';
@@ -31,18 +32,21 @@ export default function App() {
   }, [theme]);
 
   return (
-    <Router>
-      <Layout>
-        <Routes>
-          <Route path="/setup" element={<Setup />} />
-          <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
-          <Route path="/words" element={<ProtectedRoute><Words /></ProtectedRoute>} />
-          <Route path="/news" element={<ProtectedRoute><News /></ProtectedRoute>} />
-          <Route path="/writing" element={<ProtectedRoute><Writing /></ProtectedRoute>} />
-          <Route path="/dictionary" element={<ProtectedRoute><Dictionary /></ProtectedRoute>} />
-        </Routes>
-      </Layout>
-    </Router>
+    <>
+      <Router>
+        <Layout>
+          <Routes>
+            <Route path="/setup" element={<Setup />} />
+            <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
+            <Route path="/words" element={<ProtectedRoute><Words /></ProtectedRoute>} />
+            <Route path="/news" element={<ProtectedRoute><News /></ProtectedRoute>} />
+            <Route path="/writing" element={<ProtectedRoute><Writing /></ProtectedRoute>} />
+            <Route path="/dictionary" element={<ProtectedRoute><Dictionary /></ProtectedRoute>} />
+          </Routes>
+        </Layout>
+      </Router>
+      <GlobalAlert />
+    </>
   );
 }
 

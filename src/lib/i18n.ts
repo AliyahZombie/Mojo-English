@@ -42,6 +42,45 @@ export const translations = {
     wordsCount: 'words',
     deleteDeck: 'Delete',
     
+    // Setup
+    setupTitle: 'App Configuration',
+    aiProviders: 'AI Providers',
+    llmStatus: 'LLM Status',
+    connected: 'Connected',
+    dailyGoal: 'Daily Goal',
+    saveSettings: 'Save Settings',
+    settingsSaved: 'Settings Saved',
+    learningTarget: 'Learning Target',
+    preferencesTitle: 'Content Preferences',
+    preferencesDesc: 'Select topics or add custom ones.',
+    languagePreference: 'Language Preferences',
+    languageDesc: 'Choose interface language.',
+    themePreference: 'Theme Preferences',
+    themeDesc: 'Choose visual theme.',
+    offlineDictionary: 'Offline Dictionary',
+    offlineDictionaryDesc: "Download ECDICT database directly into browser's IndexedDB for lightning-fast, offline lookups.",
+    dictionaryAvailable: 'Dictionary Available',
+    dictionaryMissing: 'Dictionary Missing',
+    downloadViaNet: 'Download via Net',
+    uploadCsv: 'Upload CSV',
+    wordsLoaded: 'words loaded',
+    notLoaded: 'Not loaded. Search will fallback to LLM.',
+    reDownload: 'Re-download',
+    createDeckFromTag: 'Create Deck from Tag',
+    
+    // Dictionary
+    searchPlaceholder: 'Search for a word...',
+    searchResult: 'Search Result',
+    regenerate: 'Regenerate via AI',
+    noResult: 'No result found.',
+    loading: 'Loading...',
+    aiGenerated: 'AI Generated',
+    ecdictLocal: 'ECDICT',
+
+    // Chat
+    chatAssistant: 'AI Tutor',
+    typeMessage: 'Type your message...',
+
     // Quotes
     quotes: [
       "Keep up the momentum!",
@@ -97,6 +136,45 @@ export const translations = {
     wordsCount: '个词',
     deleteDeck: '删除',
     
+    // Setup
+    setupTitle: '应用配置',
+    aiProviders: 'AI 模型供应商',
+    llmStatus: '大模型状态',
+    connected: '已连接',
+    dailyGoal: '每日目标',
+    saveSettings: '保存设置',
+    settingsSaved: '设置已保存',
+    learningTarget: '学习目标',
+    preferencesTitle: '内容偏好',
+    preferencesDesc: '选择你感兴趣的话题，或添加自定义话题。',
+    languagePreference: '语言偏好',
+    languageDesc: '选择界面语言。',
+    themePreference: '主题偏好',
+    themeDesc: '选择视觉主题。',
+    offlineDictionary: '离线词典',
+    offlineDictionaryDesc: "在浏览器 IndexedDB 中下载 ECDICT 本地查词数据库，实现快速离线的单词查询。",
+    dictionaryAvailable: '词典已就绪',
+    dictionaryMissing: '词典缺失',
+    downloadViaNet: '网络下载',
+    uploadCsv: '上传 CSV',
+    wordsLoaded: '个单词已加载',
+    notLoaded: '未加载。搜索将回退到 AI。',
+    reDownload: '重新下载',
+    createDeckFromTag: '从标签生成词书 (预设)',
+
+    // Dictionary
+    searchPlaceholder: '查单词...',
+    searchResult: '查询结果',
+    regenerate: '使用 AI 重新生成',
+    noResult: '未找到结果。',
+    loading: '加载中...',
+    aiGenerated: 'AI 生成结果',
+    ecdictLocal: '本地词典',
+
+    // Chat
+    chatAssistant: 'AI 辅导员',
+    typeMessage: '输入消息...',
+
     // Quotes
     quotes: [
       "保持势头！",
