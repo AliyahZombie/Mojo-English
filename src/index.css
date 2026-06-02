@@ -1,21 +1,67 @@
-:root {
-  color: #172026;
-  background: #f7faf9;
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", "system-ui", sans-serif;
+  
+  --color-primary-50: #eff6ff;
+  --color-primary-100: #dbeafe;
+  --color-primary-500: #3b82f6; /* Blue */
+  --color-primary-600: #2563eb;
+  
+  /* Bright auxiliary colors */
+  --color-accent-mint: #2dd4bf;
+  --color-accent-coral: #fb7185;
+  --color-accent-yellow: #fcd34d;
 }
 
-body {
-  margin: 0;
-}
+@layer base {
+  :root {
+    --background: #f8fafc; /* Very light slate */
+    --foreground: #0f172a;
+    --card: #ffffff;
+    --card-foreground: #0f172a;
+    --border: #e2e8f0;
+    --sidebar-bg: #ffffff;
+  }
+  
+  .dark {
+    --background: #0f172a; /* Slate 900 */
+    --foreground: #f8fafc;
+    --card: #1e293b;
+    --card-foreground: #f8fafc;
+    --border: #334155;
+    --sidebar-bg: #1e293b;
+  }
 
-.app-shell {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 48px 24px;
-}
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    background-image: linear-gradient(to bottom right, #ffffff, #eff6ff);
+    background-attachment: fixed;
+  }
+  
+  .dark body {
+    background-image: none; /* No gradient in dark mode */
+    background-color: var(--background);
+  }
 
-nav {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .hide-scrollbar {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+
+  @media (max-width: 768px) {
+    body:has(input:focus, textarea:focus) .mobile-tab-bar {
+      display: none !important;
+    }
+    body:has(input:focus, textarea:focus) main {
+      padding-bottom: 24px !important;
+    }
+  }
 }
