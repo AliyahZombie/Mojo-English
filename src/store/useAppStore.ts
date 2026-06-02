@@ -1,7 +1,10 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Language } from '../lib/i18n';
-import { Redis } from '@upstash/redis';
+import type { NewsShortAnswerEvaluation } from '../services/newsTypes';
+
+const defaultNewsdataApiKey = import.meta.env.VITE_NEWSDATA_API_KEY || '';
+const defaultTavilyApiKey = import.meta.env.VITE_TAVILY_API_KEY || '';
 
 export interface Provider {
   id: string;
@@ -11,7 +14,25 @@ export interface Provider {
   apiKey: string;
   models: string[];
   activeModel: string;
+  taskModels?: Partial<Record<LlmTask, string>>;
 }
+
+export type LlmTask =
+  | 'assistant-chat'
+  | 'article-parsing'
+  | 'dictionary-lookup'
+  | 'writing-evaluation'
+  | 'news-optimization'
+  | 'quiz-evaluation';
+
+export const LLM_TASK_LABELS: Record<LlmTask, string> = {
+  'assistant-chat': '助手聊天',
+  'article-parsing': '文章解析',
+  'dictionary-lookup': '查词',
+  'writing-evaluation': '作文评估',
+  'news-optimization': '新闻界面优化 / 语言过滤',
+  'quiz-evaluation': 'Quiz 出题与简答评估',
+};
 
 export interface Deck {
   id: string;
@@ -59,15 +80,30 @@ export interface AlertData {
   title?: string;
   message: string;
   isConfirm?: boolean;
+  variant?: 'default' | 'analytics-consent';
   cancelText?: string;
   confirmText?: string;
   onConfirm?: () => void;
   onCancel?: () => void;
 }
 
+export interface NewsQuizArticleState {
+  selectedOption: number | null;
+  answerSubmitted: boolean;
+  shortAnswerDraft: string;
+  shortAnswerEvaluation: NewsShortAnswerEvaluation | null;
+}
+
+export type NewsQuizStateByArticleId = Record<string, NewsQuizArticleState>;
+
 interface AppState {
   hasConfigured: boolean;
+  analyticsConsent: boolean | null;
+  analyticsConsentSetAt: number | null;
+  analyticsOnlineUsers: number;
   upstashQstashToken: string;
+  newsdataApiKey: string;
+  tavilyApiKey: string;
   webhookUrl: string;
   webhookHeaders: string;
   webhookTemplate: string;
@@ -81,12 +117,18 @@ interface AppState {
   activeDeckId: string | null;
   essays: Essay[];
   activeEssayId: string | null;
+  newsQuizStates: NewsQuizStateByArticleId;
   
   isAssistantOpen: boolean;
   alertData: AlertData | null;
   
   setHasConfigured: (val: boolean) => void;
+  setAnalyticsConsent: (val: boolean) => void;
+  setAnalyticsOnlineUsers: (count: number) => void;
+  setNewsdataApiKey: (apiKey: string) => void;
+  setTavilyApiKey: (apiKey: string) => void;
   setNotificationConfig: (token: string, url: string, headers: string, template: string) => void;
+  replaceProviders: (providers: Provider[], activeProviderId: string) => void;
   setActiveProviderId: (id: string) => void;
   addProvider: (provider: Provider) => void;
   updateProvider: (id: string, provider: Provider) => void;
@@ -105,13 +147,28 @@ interface AppState {
   updateEssay: (id: string, essay: Partial<Essay>) => void;
   deleteEssay: (id: string) => void;
   setActiveEssayId: (id: string | null) => void;
+  setNewsQuizArticleState: (articleId: string, updates: Partial<NewsQuizArticleState>) => void;
+}
+
+function createDefaultNewsQuizArticleState(): NewsQuizArticleState {
+  return {
+    selectedOption: null,
+    answerSubmitted: false,
+    shortAnswerDraft: '',
+    shortAnswerEvaluation: null,
+  };
 }
 
 export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
       hasConfigured: false,
+      analyticsConsent: null,
+      analyticsConsentSetAt: null,
+      analyticsOnlineUsers: 0,
       upstashQstashToken: '',
+      newsdataApiKey: defaultNewsdataApiKey,
+      tavilyApiKey: defaultTavilyApiKey,
       webhookUrl: 'https://api.telegram.org/bot$telegram_bot_token/sendMessage',
       webhookHeaders: '',
       webhookTemplate: '{\n  "chat_id": 00000000,\n  "text": "$title:$content"\n}',
@@ -135,11 +192,17 @@ export const useAppStore = create<AppState>()(
       activeDeckId: null,
       essays: [],
       activeEssayId: null,
+      newsQuizStates: {},
       isAssistantOpen: false,
       alertData: null,
       
       setHasConfigured: (val) => set({ hasConfigured: val }),
+      setAnalyticsConsent: (val) => set({ analyticsConsent: val, analyticsConsentSetAt: Date.now() }),
+      setAnalyticsOnlineUsers: (count) => set({ analyticsOnlineUsers: Math.max(0, count) }),
+      setNewsdataApiKey: (apiKey) => set({ newsdataApiKey: apiKey.trim() || defaultNewsdataApiKey }),
+      setTavilyApiKey: (apiKey) => set({ tavilyApiKey: apiKey.trim() || defaultTavilyApiKey }),
       setNotificationConfig: (token, url, headers, template) => set({ upstashQstashToken: token, webhookUrl: url, webhookHeaders: headers, webhookTemplate: template }),
+      replaceProviders: (providers, activeProviderId) => set({ providers, activeProviderId }),
       setActiveProviderId: (id) => set({ activeProviderId: id }),
       addProvider: (provider) => set((state) => ({ providers: [...(Array.isArray(state.providers) ? state.providers : []), provider] })),
       updateProvider: (id, provider) => set((state) => ({
@@ -174,12 +237,25 @@ export const useAppStore = create<AppState>()(
         activeEssayId: state.activeEssayId === id ? null : state.activeEssayId
       })),
       setActiveEssayId: (id) => set({ activeEssayId: id }),
+      setNewsQuizArticleState: (articleId, updates) => set((state) => ({
+        newsQuizStates: {
+          ...state.newsQuizStates,
+          [articleId]: {
+            ...(state.newsQuizStates[articleId] ?? createDefaultNewsQuizArticleState()),
+            ...updates,
+          },
+        },
+      })),
     }),
     {
       name: 'mojo-app-store',
       partialize: (state) => ({ 
         hasConfigured: state.hasConfigured,
+        analyticsConsent: state.analyticsConsent,
+        analyticsConsentSetAt: state.analyticsConsentSetAt,
         upstashQstashToken: state.upstashQstashToken,
+        newsdataApiKey: state.newsdataApiKey.trim() || defaultNewsdataApiKey,
+        tavilyApiKey: state.tavilyApiKey.trim() || defaultTavilyApiKey,
         webhookUrl: state.webhookUrl,
         webhookHeaders: state.webhookHeaders,
         webhookTemplate: state.webhookTemplate,
@@ -192,9 +268,9 @@ export const useAppStore = create<AppState>()(
         decks: state.decks,
         activeDeckId: state.activeDeckId,
         essays: state.essays,
-        activeEssayId: state.activeEssayId
+        activeEssayId: state.activeEssayId,
+        newsQuizStates: state.newsQuizStates
       })
     }
   )
 );
-

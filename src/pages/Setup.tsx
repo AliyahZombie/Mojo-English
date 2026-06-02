@@ -1,16 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAppStore } from '../store/useAppStore';
-import { Settings, Save, Sparkles, CheckCircle2, Target, BookA, Upload, Trash2, Loader2, LogOut, Sun, Moon, Database, List, X } from 'lucide-react';
+import { Save, BookA, Upload, Trash2, Loader2, Database, List, X, Download, FileJson, BarChart3 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Logo } from '../components/Logo';
 import { translations } from '../lib/i18n';
 import { uploadAndParseApkg } from '../services/deckApi';
 import { isDictionaryLoaded, getDictionaryWordCount, getWordsByTag } from '../services/dictionaryDb';
 import { Client } from '@upstash/qstash';
-import { CustomSelect } from '../components/ui/CustomSelect';
 import { NotificationService } from '../services/notificationService';
+import { ProviderSettingsSection } from '../components/setup/ProviderSettingsSection';
+import { NotificationSettingsSection } from '../components/setup/NotificationSettingsSection';
+import { ContentPreferencesSection } from '../components/setup/ContentPreferencesSection';
+import { GoalThemeSection } from '../components/setup/GoalThemeSection';
+import { NewsApiSettingsSection } from '../components/setup/NewsApiSettingsSection';
+import { createConfigBackup, createZustandPersistValue, getConfigBackupFileName, restoreConfigBackup } from '../services/configBackup';
+import type { Provider } from '../store/useAppStore';
+import type { ManagedQStashSchedule, NotificationConfigOverride, ReviewScheduleConfig } from '../services/notificationService';
 
 const PRESET_PREFS = [
   { id: "business", name: "商业/财经" },
@@ -43,19 +50,39 @@ const ECDICT_TAGS = [
   { id: 'ielts', name: 'IELTS' }
 ];
 
+const CONFIG_IMPORT_SUCCESS_KEY = 'mojo-config-import-success';
+const ECDICT_DOWNLOAD_URL = 'https://ghproxy.aliyahzombie.top/https://raw.githubusercontent.com/skywind3000/ECDICT/refs/heads/master/ecdict.csv';
+
+type DictionaryProgress = {
+  status: string;
+  loaded?: number;
+  total?: number;
+  rowsProcessed?: number;
+};
+
 export function Setup() {
   const navigate = useNavigate();
   const { 
-    hasConfigured, setHasConfigured, activeProviderId, setActiveProviderId, 
-    providers, addProvider, updateProvider, deleteProvider, 
+    hasConfigured, setHasConfigured, activeProviderId,
+    providers, replaceProviders,
     preferences, setPreferences, dailyGoal, setDailyGoal, 
     language, theme, toggleTheme, decks, activeDeckId, addDeck, 
     setActiveDeckId, deleteDeck, upstashQstashToken, webhookUrl, 
-    webhookTemplate, setNotificationConfig, webhookHeaders
+    webhookTemplate, setNotificationConfig, webhookHeaders,
+    newsdataApiKey, setNewsdataApiKey, tavilyApiKey, setTavilyApiKey,
+    analyticsConsent, setAnalyticsConsent
   } = useAppStore();
   
   const t = translations[language];
-  const [localProviders, setLocalProviders] = useState(() => {
+  const parseWebhookTemplate = (body: string): unknown => {
+    try {
+      return JSON.parse(body);
+    } catch {
+      throw new Error(t.templateJsonError);
+    }
+  };
+
+  const [localProviders, setLocalProviders] = useState<Provider[]>(() => {
     // Migration for legacy object providers from localStorage
     if (Array.isArray(providers)) {
       return JSON.parse(JSON.stringify(providers));
@@ -68,7 +95,8 @@ export function Setup() {
         baseUrl: p.baseUrl || '',
         apiKey: p.apiKey || '',
         models: p.models || [],
-        activeModel: p.activeModel || ''
+        activeModel: p.activeModel || '',
+        taskModels: p.taskModels || {},
       }));
     }
     return [];
@@ -79,17 +107,34 @@ export function Setup() {
   const [localDailyGoal, setLocalDailyGoal] = useState<number>(dailyGoal || 5);
   const [customPref, setCustomPref] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [isConfigBackupBusy, setIsConfigBackupBusy] = useState(false);
+  const configImportInputRef = useRef<HTMLInputElement | null>(null);
   
   const [localQstashToken, setLocalQstashToken] = useState(upstashQstashToken);
+  const [localNewsdataApiKey, setLocalNewsdataApiKey] = useState(newsdataApiKey);
+  const [localTavilyApiKey, setLocalTavilyApiKey] = useState(tavilyApiKey);
+  const [localAnalyticsConsent, setLocalAnalyticsConsent] = useState<boolean | null>(analyticsConsent);
   const [localWebhookUrl, setLocalWebhookUrl] = useState(webhookUrl);
   const [localWebhookHeaders, setLocalWebhookHeaders] = useState(webhookHeaders || '');
   const [localWebhookTemplate, setLocalWebhookTemplate] = useState(webhookTemplate);
   const [isTestSending, setIsTestSending] = useState(false);
 
-  const [scheduleCron, setScheduleCron] = useState('0 10 * * *');
+  const [scheduleConfig, setScheduleConfig] = useState<ReviewScheduleConfig>({
+    daysOfWeek: [1, 2, 3, 4, 5, 6, 0],
+    time: '10:00',
+  });
   const [scheduleIsLoading, setScheduleIsLoading] = useState(false);
   const [hasSchedule, setHasSchedule] = useState(false);
   const [isSchedulePaused, setIsSchedulePaused] = useState(false);
+  const [qstashSchedules, setQstashSchedules] = useState<ManagedQStashSchedule[]>([]);
+
+  useEffect(() => {
+    if (sessionStorage.getItem(CONFIG_IMPORT_SUCCESS_KEY) !== 'true') return;
+    sessionStorage.removeItem(CONFIG_IMPORT_SUCCESS_KEY);
+    window.setTimeout(() => {
+      useAppStore.getState().showAlert(t.configImportSuccess);
+    }, 0);
+  }, [t.configImportSuccess]);
 
   useEffect(() => {
     if (upstashQstashToken && webhookUrl) {
@@ -97,58 +142,110 @@ export function Setup() {
     }
   }, [upstashQstashToken, webhookUrl]);
 
+  const getLocalNotificationConfig = (): NotificationConfigOverride => ({
+    token: localQstashToken,
+    webhookUrl: localWebhookUrl,
+    webhookHeaders: localWebhookHeaders,
+    webhookTemplate: localWebhookTemplate,
+  });
+
+  const deriveScheduleConfigFromCron = (cron: string): ReviewScheduleConfig | null => {
+    const parts = cron.trim().split(/\s+/);
+    if (parts.length !== 5) return null;
+    const [minutePart, hourPart, , , dayPart] = parts;
+    const minute = Number(minutePart);
+    const hour = Number(hourPart);
+    if (!Number.isInteger(minute) || !Number.isInteger(hour) || minute < 0 || minute > 59 || hour < 0 || hour > 23) {
+      return null;
+    }
+
+    let daysOfWeek: number[];
+    if (dayPart === '*') {
+      daysOfWeek = [1, 2, 3, 4, 5, 6, 0];
+    } else {
+      daysOfWeek = dayPart.split(',').map(value => Number(value));
+      if (daysOfWeek.some(day => !Number.isInteger(day) || day < 0 || day > 6)) return null;
+    }
+
+    return {
+      daysOfWeek,
+      time: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+    };
+  };
+
   const loadSchedule = async () => {
     setScheduleIsLoading(true);
     try {
-      const sch = await NotificationService.getDailySchedule();
+      const config = getLocalNotificationConfig();
+      const [sch, schedules] = await Promise.all([
+        NotificationService.getDailySchedule(config),
+        NotificationService.listSchedules(config),
+      ]);
       if (sch) {
         setHasSchedule(true);
-        setScheduleCron(sch.cron);
+        const parsedConfig = deriveScheduleConfigFromCron(sch.cron);
+        if (parsedConfig) setScheduleConfig(parsedConfig);
         setIsSchedulePaused(sch.isPaused);
       } else {
         setHasSchedule(false);
       }
+      setQstashSchedules(schedules);
     } catch {
       setHasSchedule(false);
+      setQstashSchedules([]);
     } finally {
       setScheduleIsLoading(false);
     }
   };
 
   const handleCreateSchedule = async () => {
-    if (!localQstashToken) return useAppStore.getState().showAlert('Please save QStash Token first');
+    if (!localQstashToken) return useAppStore.getState().showAlert(t.enterQstashTokenFirst);
+    if (!localWebhookUrl) return useAppStore.getState().showAlert(t.enterWebhookUrlFirst);
     setScheduleIsLoading(true);
     try {
-      await NotificationService.upsertDailySchedule(scheduleCron);
-      useAppStore.getState().showAlert('Schedule created/updated successfully!');
+      await NotificationService.upsertDailySchedule(scheduleConfig, getLocalNotificationConfig());
+      useAppStore.getState().showAlert(t.scheduleSaved);
       await loadSchedule();
-    } catch (e: any) {
-      useAppStore.getState().showAlert(`Failed: ${e.message}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      useAppStore.getState().showAlert(`${t.failedPrefix}: ${message}`);
     } finally {
       setScheduleIsLoading(false);
     }
   };
 
-  const handleDeleteSchedule = async () => {
+  const handleRefreshSchedules = async () => {
+    if (!localQstashToken) return useAppStore.getState().showAlert(t.enterQstashTokenFirst);
     setScheduleIsLoading(true);
     try {
-      await NotificationService.deleteDailySchedule();
-      useAppStore.getState().showAlert('Schedule deleted!');
       await loadSchedule();
-    } catch (e: any) {
-      useAppStore.getState().showAlert(`Failed: ${e.message}`);
     } finally {
       setScheduleIsLoading(false);
     }
   };
 
-  const handleToggleSchedule = async () => {
+  const handleDeleteSchedule = async (scheduleId: string) => {
     setScheduleIsLoading(true);
     try {
-      await NotificationService.toggleDailySchedule(!isSchedulePaused);
+      await NotificationService.deleteSchedule(scheduleId, getLocalNotificationConfig());
+      useAppStore.getState().showAlert(t.scheduleDeleted);
       await loadSchedule();
-    } catch (e: any) {
-      useAppStore.getState().showAlert(`Failed: ${e.message}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      useAppStore.getState().showAlert(`${t.failedPrefix}: ${message}`);
+    } finally {
+      setScheduleIsLoading(false);
+    }
+  };
+
+  const handleToggleSchedule = async (scheduleId: string, pause: boolean) => {
+    setScheduleIsLoading(true);
+    try {
+      await NotificationService.toggleSchedule(scheduleId, pause, getLocalNotificationConfig());
+      await loadSchedule();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      useAppStore.getState().showAlert(`${t.failedPrefix}: ${message}`);
     } finally {
       setScheduleIsLoading(false);
     }
@@ -156,24 +253,19 @@ export function Setup() {
 
   const handleTestSendDirect = async () => {
     if (!localWebhookUrl) {
-      useAppStore.getState().showAlert('Please enter a Webhook URL');
+      useAppStore.getState().showAlert(t.enterWebhookUrl);
       return;
     }
     
     setIsTestSending(true);
     try {
-      let finalUrl = localWebhookUrl.replace(/\$url/g, window.location.origin);
+      const finalUrl = localWebhookUrl.replace(/\$url/g, window.location.origin);
       const bodyStr = localWebhookTemplate
-        .replace(/\$title/g, 'Direct Test Notification')
-        .replace(/\$content/g, 'This is a test message from Mojo without QStash')
+        .replace(/\$title/g, t.directTestTitle)
+        .replace(/\$content/g, t.directTestContent)
         .replace(/\$url/g, window.location.origin);
-        
-      let parsedBody;
-      try {
-        parsedBody = JSON.parse(bodyStr);
-      } catch (err) {
-        throw new Error('Template is not a valid JSON string');
-      }
+
+      const parsedBody: unknown = parseWebhookTemplate(bodyStr);
 
       // Parse headers
       const customHeaders: Record<string, string> = {
@@ -200,10 +292,11 @@ export function Setup() {
       if (!res.ok) {
         throw new Error(`Server returned ${res.status}`);
       }
-      useAppStore.getState().showAlert('Direct test sent successfully! Check your destination.');
-    } catch (err: any) {
+      useAppStore.getState().showAlert(t.directTestSuccess);
+    } catch (err) {
       console.error(err);
-      useAppStore.getState().showAlert(`Direct test send failed: ${err.message}`);
+      const message = err instanceof Error ? err.message : String(err);
+      useAppStore.getState().showAlert(`${t.directTestFailed}: ${message}`);
     } finally {
       setIsTestSending(false);
     }
@@ -211,28 +304,23 @@ export function Setup() {
 
   const handleTestSendQStash = async () => {
     if (!localQstashToken) {
-      useAppStore.getState().showAlert('Please enter a QStash Token');
+      useAppStore.getState().showAlert(t.enterQstashToken);
       return;
     }
     if (!localWebhookUrl) {
-      useAppStore.getState().showAlert('Please enter a Webhook URL');
+      useAppStore.getState().showAlert(t.enterWebhookUrl);
       return;
     }
     
     setIsTestSending(true);
     try {
-      let finalUrl = localWebhookUrl.replace(/\$url/g, window.location.origin);
+      const finalUrl = localWebhookUrl.replace(/\$url/g, window.location.origin);
       const bodyStr = localWebhookTemplate
-        .replace(/\$title/g, 'QStash Test Notification')
-        .replace(/\$content/g, 'This is a test message from Mojo via Upstash')
+        .replace(/\$title/g, t.qstashTestTitle)
+        .replace(/\$content/g, t.qstashTestContent)
         .replace(/\$url/g, window.location.origin);
-        
-      let parsedBody;
-      try {
-        parsedBody = JSON.parse(bodyStr);
-      } catch (err) {
-        throw new Error('Template is not a valid JSON string');
-      }
+
+      const parsedBody: unknown = parseWebhookTemplate(bodyStr);
 
       // Parse headers
       const customHeaders: Record<string, string> = {
@@ -264,17 +352,18 @@ export function Setup() {
       });
 
       console.log("[QStash Test] Publish success:", result);
-      useAppStore.getState().showAlert(`QStash test sent successfully!\nMessage ID: ${result.messageId}`);
-    } catch (err: any) {
+      useAppStore.getState().showAlert(`${t.qstashTestSuccess}\nMessage ID: ${result.messageId}`);
+    } catch (err) {
       console.error("[QStash Test] Failed error:", err);
-      useAppStore.getState().showAlert(`QStash test send failed: ${err.message || String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      useAppStore.getState().showAlert(`${t.qstashTestFailed}: ${message}`);
     } finally {
       setIsTestSending(false);
     }
   };
 
   const [dictStatus, setDictStatus] = useState<{ isLoaded: boolean; count: number }>({ isLoaded: false, count: 0 });
-  const [dictProgress, setDictProgress] = useState<{ status: string; loaded?: number; total?: number; rowsProcessed?: number } | null>(null);
+  const [dictProgress, setDictProgress] = useState<DictionaryProgress | null>(null);
   const [isCreatingFromTag, setIsCreatingFromTag] = useState(false);
 
   const [customDeckTag, setCustomDeckTag] = useState('');
@@ -282,12 +371,47 @@ export function Setup() {
   const [viewingDeckId, setViewingDeckId] = useState<string | null>(null);
   const viewingDeck = decks.find(d => d.id === viewingDeckId);
 
+  const updateLocalProvider = <K extends keyof Provider>(index: number, field: K, value: Provider[K]) => {
+    const nextProviders = [...localProviders];
+    nextProviders[index] = { ...nextProviders[index], [field]: value };
+    setLocalProviders(nextProviders);
+  };
+
+  const handleAddProvider = () => {
+    const newProvider: Provider = {
+      id: `provider-${Date.now()}`,
+      type: 'OPENAI',
+      name: t.newProvider,
+      baseUrl: '',
+      apiKey: '',
+      models: [],
+      activeModel: '',
+      taskModels: {},
+    };
+    setLocalProviders([...localProviders, newProvider]);
+  };
+
+  const handleRemoveProvider = (providerId: string) => {
+    const newProviders = localProviders.filter((provider) => provider.id !== providerId);
+    setLocalProviders(newProviders);
+    if (localActiveProviderId === providerId && newProviders.length > 0) {
+      setLocalActiveProviderId(newProviders[0].id);
+    }
+  };
+
+  const handleAddCustomPreference = () => {
+    if (customPref && !prefs.includes(customPref)) {
+      setPrefs([...prefs, customPref]);
+      setCustomPref('');
+    }
+  };
+
   const handleCreateDeckFromTag = async (tag: string, name: string) => {
     setIsCreatingFromTag(true);
     try {
       const words = await getWordsByTag(tag);
       if (words.length === 0) {
-        useAppStore.getState().showAlert('No words found for this tag.');
+        useAppStore.getState().showAlert(t.noWordsForTag);
         return;
       }
       const newDeck = {
@@ -298,10 +422,10 @@ export function Setup() {
       };
       addDeck(newDeck);
       if (!activeDeckId) setActiveDeckId(newDeck.id);
-      useAppStore.getState().showAlert(`Created deck successfully with ${words.length} words!`);
+      useAppStore.getState().showAlert(`${t.deckCreatedWith} ${words.length} ${t.words}!`);
     } catch (e) {
       console.error(e);
-      useAppStore.getState().showAlert('Failed to create deck from tag.');
+      useAppStore.getState().showAlert(t.deckCreateFailed);
     } finally {
       setIsCreatingFromTag(false);
     }
@@ -316,7 +440,7 @@ export function Setup() {
     });
   }, []);
 
-  const fetchModels = async (provider: any, idx: number) => {
+  const fetchModels = async (provider: Provider, idx: number) => {
     let fetched = [...provider.models];
     try {
       if (provider.type === 'OPENAI') {
@@ -326,21 +450,21 @@ export function Setup() {
         });
         const data = await res.json();
         if (data && data.data) {
-          fetched = data.data.map((m: any) => m.id);
+          fetched = data.data.map((m: { id: string }) => m.id);
         }
       } else if (provider.type === 'GEMINI') {
         const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${provider.apiKey}`;
         const res = await fetch(url);
         const data = await res.json();
         if (data && data.models) {
-          fetched = data.models.map((m: any) => m.name.replace('models/', ''));
+          fetched = data.models.map((m: { name: string }) => m.name.replace('models/', ''));
         }
       } else if (provider.type === 'CLAUDE') {
         fetched = ['claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307'];
       }
     } catch (e) {
       console.error('Failed to fetch models', e);
-      useAppStore.getState().showAlert('Failed to fetch models. Check console for details.');
+      useAppStore.getState().showAlert(t.fetchModelsFailed);
     }
     
     // Sort logic, prioritize common models, filter out non-chat models
@@ -366,17 +490,185 @@ export function Setup() {
     }
   };
 
+  const refreshDictionaryStatus = async () => {
+    const { getDictionaryWordCount } = await import('../services/dictionaryDb');
+    const count = await getDictionaryWordCount();
+    setDictStatus({ isLoaded: count > 0, count });
+  };
+
+  const importDictionaryFile = async (file: File) => {
+    setDictProgress({ status: 'starting' });
+    const { importDictionaryFromBlob } = await import('../services/dictionaryDb');
+    await importDictionaryFromBlob(file, setDictProgress);
+    await refreshDictionaryStatus();
+  };
+
+  const downloadDictionaryFile = async (): Promise<File> => {
+    setDictProgress({ status: 'fetching', loaded: 0 });
+    const response = await fetch(ECDICT_DOWNLOAD_URL);
+    if (!response.ok) {
+      throw new Error(`Dictionary download failed with HTTP ${response.status}`);
+    }
+
+    const totalHeader = response.headers.get('content-length');
+    const total = totalHeader ? Number(totalHeader) : undefined;
+    const reader = response.body?.getReader();
+    if (!reader) {
+      const blob = await response.blob();
+      setDictProgress({ status: 'downloaded', loaded: blob.size, total: blob.size });
+      return new File([blob], 'ecdict.csv', { type: 'text/csv' });
+    }
+
+    const chunks: Uint8Array[] = [];
+    let loaded = 0;
+    setDictProgress({ status: 'downloading', loaded, total });
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        loaded += value.byteLength;
+        setDictProgress({ status: 'downloading', loaded, total });
+      }
+    }
+
+    const blob = new Blob(chunks, { type: 'text/csv' });
+    setDictProgress({ status: 'downloaded', loaded: blob.size, total: total || blob.size });
+    return new File([blob], 'ecdict.csv', { type: 'text/csv' });
+  };
+
+  const handleDownloadDictionary = async () => {
+    try {
+      const file = await downloadDictionaryFile();
+      await importDictionaryFile(file);
+      useAppStore.getState().showAlert(t.dictionaryDownloadSuccess);
+    } catch (err) {
+      console.error('Failed to download dictionary', err);
+      setDictProgress({ status: 'error' });
+      const message = err instanceof Error ? err.message : String(err);
+      useAppStore.getState().showAlert(`${t.dictionaryDownloadFailed}: ${message}`);
+    } finally {
+      setDictProgress(null);
+    }
+  };
+
+  const handleUploadDictionary = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      await importDictionaryFile(file);
+      useAppStore.getState().showAlert(t.dictionaryImportSuccess);
+    } catch (err) {
+      console.error('Failed to import dictionary', err);
+      setDictProgress({ status: 'error' });
+      const message = err instanceof Error ? err.message : String(err);
+      useAppStore.getState().showAlert(`${t.dictionaryImportFailed}: ${message}`);
+    } finally {
+      setDictProgress(null);
+      e.target.value = '';
+    }
+  };
+
+  const getDictionaryProgressPercent = () => {
+    if (!dictProgress?.loaded || !dictProgress.total) return null;
+    return Math.min(100, Math.round((dictProgress.loaded / dictProgress.total) * 100));
+  };
+
+  const getDictionaryProgressLabel = () => {
+    if (!dictProgress) return '';
+    const progressPercent = getDictionaryProgressPercent();
+    const downloadedMb = dictProgress.loaded ? (dictProgress.loaded / 1024 / 1024).toFixed(1) : '0.0';
+    const totalMb = dictProgress.total ? (dictProgress.total / 1024 / 1024).toFixed(1) : null;
+
+    if (dictProgress.status === 'fetching') return t.dictProgressFetching;
+    if (dictProgress.status === 'downloading') {
+      return totalMb && progressPercent !== null
+        ? `${t.dictProgressDownloading}: ${progressPercent}% (${downloadedMb} / ${totalMb} MB)`
+        : `${t.dictProgressDownloading}: ${downloadedMb} MB`;
+    }
+    if (dictProgress.status === 'downloaded') return t.dictProgressDownloaded;
+    if (dictProgress.status === 'reading') return t.dictProgressReading;
+    if (dictProgress.status === 'parsing') return `${t.dictProgressParsing}: ${dictProgress.rowsProcessed?.toLocaleString() || 0} ${t.words}...`;
+    if (dictProgress.status === 'complete') return t.dictProgressComplete;
+    if (dictProgress.status === 'error') return t.dictProgressError;
+    return t.dictProgressWaiting;
+  };
+
+  const handleExportConfig = async () => {
+    setIsConfigBackupBusy(true);
+    try {
+      const appStoreDraft = createZustandPersistValue(localStorage.getItem('mojo-app-store'), {
+        activeProviderId: localActiveProviderId,
+        providers: localProviders,
+        preferences: prefs,
+        dailyGoal: localDailyGoal,
+        newsdataApiKey: localNewsdataApiKey.trim(),
+        tavilyApiKey: localTavilyApiKey.trim(),
+        upstashQstashToken: localQstashToken,
+        webhookUrl: localWebhookUrl,
+        webhookHeaders: localWebhookHeaders,
+        webhookTemplate: localWebhookTemplate,
+      });
+      const backupBlob = await createConfigBackup({ 'mojo-app-store': appStoreDraft });
+      const url = URL.createObjectURL(backupBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = getConfigBackupFileName();
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      useAppStore.getState().showAlert(t.configExportSuccess);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      useAppStore.getState().showAlert(`${t.configExportFailed}: ${message}`);
+    } finally {
+      setIsConfigBackupBusy(false);
+    }
+  };
+
+  const handleImportConfig = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    useAppStore.getState().showAlert({
+      title: t.configImportTitle,
+      message: t.configImportMessage,
+      isConfirm: true,
+      confirmText: t.configImportConfirm,
+      cancelText: t.cancel,
+      onConfirm: async () => {
+        setIsConfigBackupBusy(true);
+        try {
+          await restoreConfigBackup(file);
+          sessionStorage.setItem(CONFIG_IMPORT_SUCCESS_KEY, 'true');
+          window.location.reload();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          useAppStore.getState().showAlert(`${t.configImportFailed}: ${message}`);
+        } finally {
+          setIsConfigBackupBusy(false);
+          if (configImportInputRef.current) configImportInputRef.current.value = '';
+        }
+      },
+      onCancel: () => {
+        if (configImportInputRef.current) configImportInputRef.current.value = '';
+      },
+    });
+  };
+
   const handleSave = () => {
-    // Diff to delete removed ones? No, we can just replace everything in store
-    // Since useAppStore doesn't have setProviders, we should do it or add it
-    // Wait, the store doesn't have a setProviders! Let's update useAppStore later to accept an array, or we can just iterate.
-    // Actually, localProviders IS the full array. But the store only has updateProvider / addProvider. Let's add a setProviders to store.
-    
-    // For now we assume we add a setProviders inside useAppStore
-    useAppStore.setState({ providers: localProviders, activeProviderId: localActiveProviderId });
+    replaceProviders(localProviders, localActiveProviderId);
     
     setPreferences(prefs);
     setDailyGoal(localDailyGoal);
+    setNewsdataApiKey(localNewsdataApiKey.trim());
+    setTavilyApiKey(localTavilyApiKey.trim());
+    if (localAnalyticsConsent !== null) {
+      setAnalyticsConsent(localAnalyticsConsent);
+    }
     setNotificationConfig(localQstashToken, localWebhookUrl, localWebhookHeaders, localWebhookTemplate);
     setHasConfigured(true);
     navigate('/');
@@ -400,430 +692,146 @@ export function Setup() {
         <div className="flex justify-center mb-6">
           <Logo size="md" />
         </div>
-        <h1 className="text-2xl md:text-3xl font-bold mb-2 text-slate-800 dark:text-slate-200 transition-colors">{t.setupTitle || 'App Configuration'}</h1>
-        <p className="text-slate-500 dark:text-slate-400 text-sm md:text-base transition-colors">Let's configure your English learning experience.</p>
+        <h1 className="text-2xl md:text-3xl font-bold mb-2 text-slate-800 dark:text-slate-200 transition-colors">{t.setupTitle}</h1>
+        <p className="text-slate-500 dark:text-slate-400 text-sm md:text-base transition-colors">{t.setupIntro}</p>
       </div>
 
-      <div className="space-y-6 md:space-y-8">
+        <div className="space-y-6 md:space-y-8">
+        <ProviderSettingsSection
+          title={t.aiProviders || 'AI Providers'}
+          providers={localProviders}
+          activeProviderId={localActiveProviderId}
+          onAddProvider={handleAddProvider}
+          onSelectActiveProvider={setLocalActiveProviderId}
+          onRemoveProvider={handleRemoveProvider}
+          onProviderFieldChange={updateLocalProvider}
+          onFetchModels={fetchModels}
+        />
+
+        <NotificationSettingsSection
+          qstashToken={localQstashToken}
+          webhookUrl={localWebhookUrl}
+          webhookHeaders={localWebhookHeaders}
+          webhookTemplate={localWebhookTemplate}
+          isTestSending={isTestSending}
+          scheduleConfig={scheduleConfig}
+          scheduleIsLoading={scheduleIsLoading}
+          hasSchedule={hasSchedule}
+          isSchedulePaused={isSchedulePaused}
+          primaryScheduleId={NotificationService.SCHEDULE_ID}
+          schedules={qstashSchedules}
+          onQstashTokenChange={setLocalQstashToken}
+          onWebhookUrlChange={setLocalWebhookUrl}
+          onWebhookHeadersChange={setLocalWebhookHeaders}
+          onWebhookTemplateChange={setLocalWebhookTemplate}
+          onTestSendDirect={handleTestSendDirect}
+          onTestSendQStash={handleTestSendQStash}
+          onScheduleConfigChange={setScheduleConfig}
+          onCreateSchedule={handleCreateSchedule}
+          onRefreshSchedules={handleRefreshSchedules}
+          onToggleSchedule={handleToggleSchedule}
+          onDeleteSchedule={handleDeleteSchedule}
+        />
+
+        <NewsApiSettingsSection
+          newsdataApiKey={localNewsdataApiKey}
+          tavilyApiKey={localTavilyApiKey}
+          onNewsdataApiKeyChange={setLocalNewsdataApiKey}
+          onTavilyApiKeyChange={setLocalTavilyApiKey}
+        />
+
+        {analyticsConsent !== null && (
         <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 md:p-8 shadow-sm border border-blue-50 dark:border-slate-800 transition-colors">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <Sparkles className="text-blue-500 dark:text-blue-400 transition-colors" size={24} />
-              <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 transition-colors">{t.aiProviders || 'AI Providers'}</h2>
-            </div>
-            <button 
-              onClick={() => {
-                const newProvider = { id: `provider-${Date.now()}`, type: 'OPENAI', name: 'New Provider', baseUrl: '', apiKey: '', models: [], activeModel: '' };
-                setLocalProviders([...localProviders, newProvider]);
-              }}
-              className="px-3 py-1.5 text-sm font-medium bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-xl hover:bg-blue-100 dark:hover:bg-blue-800/60 transition-colors"
-            >
-              + Add Provider
-            </button>
+          <div className="flex items-center gap-3 mb-4">
+            <BarChart3 className="text-blue-500 dark:text-blue-400 transition-colors" size={24} />
+            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 transition-colors">{t.analyticsConsentTitle}</h2>
           </div>
-          
-          <div className="space-y-6">
-            {localProviders.map((provider: any, idx: number) => (
-              <div key={provider.id} className="p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30">
-                <div className="flex justify-between items-center mb-4">
-                  <div className="flex items-center gap-2">
-                    <input 
-                      type="radio" 
-                      name="activeProviderId" 
-                      checked={localActiveProviderId === provider.id}
-                      onChange={() => setLocalActiveProviderId(provider.id)}
-                      className="w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500 cursor-pointer"
-                    />
-                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">Set as Active</span>
-                  </div>
-                  {localProviders.length > 1 && (
-                    <button 
-                      onClick={() => {
-                        const newProviders = localProviders.filter((p: any) => p.id !== provider.id);
-                        setLocalProviders(newProviders);
-                        if (localActiveProviderId === provider.id) setLocalActiveProviderId(newProviders[0].id);
-                      }}
-                      className="p-1.5 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1.5 transition-colors">Type</label>
-                    <CustomSelect 
-                      options={[
-                        { value: 'OPENAI', label: 'OpenAI Compatible' },
-                        { value: 'GEMINI', label: 'Google Gemini' },
-                        { value: 'CLAUDE', label: 'Anthropic Claude' }
-                      ]}
-                      value={provider.type}
-                      onChange={(value) => {
-                        const newP = [...localProviders];
-                        newP[idx].type = value;
-                        setLocalProviders(newP);
-                      }} 
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1.5 transition-colors">Display Name</label>
-                    <input 
-                      type="text" 
-                      value={provider.name}
-                      onChange={(e) => {
-                        const newP = [...localProviders];
-                        newP[idx].name = e.target.value;
-                        setLocalProviders(newP);
-                      }}
-                      className="w-full bg-white dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-200"
-                      placeholder="e.g. DeepSeek"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1.5 transition-colors">Base URL</label>
-                    <input 
-                      type="text" 
-                      value={provider.baseUrl}
-                      onChange={(e) => {
-                        const newP = [...localProviders];
-                        newP[idx].baseUrl = e.target.value;
-                        setLocalProviders(newP);
-                      }}
-                      className="w-full bg-white dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-200"
-                      placeholder="e.g. https://api.openai.com/v1"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1.5 transition-colors">API Key</label>
-                    <input 
-                      type="password"
-                      value={provider.apiKey}
-                      onChange={(e) => {
-                        const newP = [...localProviders];
-                        newP[idx].apiKey = e.target.value;
-                        setLocalProviders(newP);
-                      }}
-                      className="w-full bg-white dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-200"
-                      placeholder="sk-..."
-                    />
-                  </div>
-                  
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1.5 transition-colors">Model</label>
-                    <div className="flex gap-2">
-                      {provider.models.length > 0 ? (
-                        <CustomSelect 
-                          className="flex-1"
-                          options={provider.models.map((m: string) => ({ value: m, label: m }))}
-                          value={provider.activeModel}
-                          onChange={(value) => {
-                            const newP = [...localProviders];
-                            newP[idx].activeModel = value;
-                            setLocalProviders(newP);
-                          }}
-                        />
-                      ) : (
-                        <input 
-                          type="text"
-                          value={provider.activeModel}
-                          onChange={(e) => {
-                            const newP = [...localProviders];
-                            newP[idx].activeModel = e.target.value;
-                            setLocalProviders(newP);
-                          }}
-                          className="flex-1 bg-white dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-200"
-                          placeholder="Wait for fetch or custom model name"
-                        />
-                      )}
-                      
-                      <button 
-                        onClick={() => fetchModels(provider, idx)}
-                        className="bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-800 px-4 rounded-xl font-medium hover:bg-blue-100 dark:hover:bg-blue-800/60 transition-colors"
-                      >
-                        Fetch
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 md:p-8 shadow-sm border border-blue-50 dark:border-slate-800 transition-colors">
-          <div className="flex items-center gap-3 mb-6">
-            <Settings className="text-emerald-500 dark:text-emerald-400 transition-colors" size={24} />
-            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 transition-colors">Notification</h2>
-          </div>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
-            Mojo uses Upstash QStash to provide push services. <br />
-            Get your QStash Token at <a href="https://console.upstash.com/qstash" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-600 underline">https://console.upstash.com/qstash</a>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">
+            {t.analyticsConsentDesc}
           </p>
-          
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1.5 transition-colors">QStash Token</label>
-              <input 
-                type="password"
-                value={localQstashToken}
-                onChange={(e) => setLocalQstashToken(e.target.value)}
-                className="w-full bg-slate-50 dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-200"
-                placeholder="eyJhbGciOi..."
-              />
-            </div>
-            
-            <div className="pt-2">
-              <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1.5 transition-colors">Webhook URL</label>
-              <p className="text-xs text-slate-400 mb-2">Configure a webhook address. URL supports $ variables. Mojo will push to this address via QStash.</p>
-              <input 
-                type="text" 
-                value={localWebhookUrl}
-                onChange={(e) => setLocalWebhookUrl(e.target.value)}
-                className="w-full bg-slate-50 dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-200"
-                placeholder="https://api.telegram.org/bot$telegram_bot_token/sendMessage"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1.5 transition-colors">Custom Headers (Optional)</label>
-              <p className="text-xs text-slate-400 mb-2">One per line, e.g. Authorization: Bearer sk-xxx</p>
-              <textarea 
-                value={localWebhookHeaders}
-                onChange={(e) => setLocalWebhookHeaders(e.target.value)}
-                className="w-full h-24 font-mono text-sm bg-slate-50 dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-200"
-                placeholder="Authorization: Bearer sk-xxx\nX-Custom-Header: value"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1.5 transition-colors">Message Body Template (JSON)</label>
-              <p className="text-xs text-slate-400 mb-2">Supports magic variables: $title, $content, $url</p>
-              <textarea 
-                value={localWebhookTemplate}
-                onChange={(e) => setLocalWebhookTemplate(e.target.value)}
-                className="w-full h-32 font-mono text-sm bg-slate-50 dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-200"
-                placeholder='{\n  "chat_id": 00000000,\n  "text": "$title:$content"\n}'
-              />
-            </div>
-
-            <div className="pt-2 flex justify-end gap-3">
-              <button
-                onClick={handleTestSendDirect}
-                disabled={isTestSending}
-                className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl font-medium text-sm hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors disabled:opacity-50 flex items-center gap-2"
-              >
-                {isTestSending && <Loader2 size={16} className="animate-spin" />}
-                Direct Test Webhook
-              </button>
-              <button
-                onClick={handleTestSendQStash}
-                disabled={isTestSending}
-                className="px-4 py-2 bg-blue-500 text-white rounded-xl font-medium text-sm hover:bg-blue-600 transition-colors shadow-sm shadow-blue-500/20 disabled:opacity-50 flex items-center gap-2"
-              >
-                {isTestSending && <Loader2 size={16} className="animate-spin" />}
-                Test via QStash
-              </button>
-            </div>
-
-            <hr className="border-slate-100 dark:border-slate-800 my-4" />
-
-            <div className="pt-2">
-              <div className="flex items-center gap-2 mb-4">
-                <Clock className="text-blue-500" size={20} />
-                <h3 className="font-semibold text-slate-800 dark:text-slate-200">Daily Review Schedule</h3>
-              </div>
-              <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
-                Set a daily CRON expression to receive automatic reminders via QStash.
-              </p>
-              
-              <div className="flex items-center gap-4 mb-4">
-                <input 
-                  type="text"
-                  value={scheduleCron}
-                  onChange={(e) => setScheduleCron(e.target.value)}
-                  className="flex-1 bg-slate-50 dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-200 font-mono"
-                  placeholder="0 10 * * *"
-                />
-                <button
-                  onClick={handleCreateSchedule}
-                  disabled={scheduleIsLoading}
-                  className="px-6 py-3 bg-blue-500 text-white rounded-xl font-medium text-sm hover:bg-blue-600 transition-colors shadow-sm shadow-blue-500/20 disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
-                >
-                  {scheduleIsLoading && <Loader2 size={16} className="animate-spin" />}
-                  Save Schedule
-                </button>
-              </div>
-
-              {hasSchedule && (
-                <div className="bg-blue-50 dark:bg-slate-800/50 p-4 rounded-xl flex items-center justify-between border border-blue-100 dark:border-slate-700">
-                  <div className="flex flex-col">
-                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                      Active Schedule
-                    </span>
-                    <span className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1 mt-1">
-                      {isSchedulePaused ? <span className="w-2 h-2 rounded-full bg-yellow-400 inline-block"/> : <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"/>}
-                      {isSchedulePaused ? 'Paused' : 'Running'}
-                    </span>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleToggleSchedule}
-                      disabled={scheduleIsLoading}
-                      className="px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors disabled:opacity-50"
-                    >
-                      {isSchedulePaused ? 'Resume' : 'Pause'}
-                    </button>
-                    <button
-                      onClick={handleDeleteSchedule}
-                      disabled={scheduleIsLoading}
-                      className="px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 dark:bg-red-500/10 border border-red-100 dark:border-red-500/20 rounded-lg hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors disabled:opacity-50"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => setLocalAnalyticsConsent(true)}
+              className={cn(
+                "rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors",
+                localAnalyticsConsent === true
+                  ? "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                  : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-400 dark:hover:bg-slate-800/60"
               )}
-            </div>
-
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 md:p-8 shadow-sm border border-blue-50 dark:border-slate-800 transition-colors">
-          <div className="flex items-center gap-3 mb-6">
-            <CheckCircle2 className="text-emerald-500 dark:text-emerald-400 transition-colors" size={24} />
-            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 transition-colors">{t.preferencesTitle || 'Content Preferences'}</h2>
-          </div>
-          
-          <div className="flex flex-wrap gap-2 mb-6">
-            {PRESET_PREFS.map(p => {
-              const active = prefs.includes(p.id);
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => togglePref(p.id)}
-                  className={cn(
-                    "px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border",
-                    active 
-                      ? "bg-blue-600 dark:bg-blue-500 text-white border-blue-500 dark:border-blue-400 shadow-md shadow-blue-500/20 dark:shadow-none" 
-                      : "bg-transparent text-slate-600 dark:text-slate-400 border-blue-100 dark:border-slate-700 hover:border-blue-400 dark:hover:border-slate-500"
-                  )}
-                >
-                  {p.name}
-                </button>
-              );
-            })}
-            {prefs.filter(p => !PRESET_PREFS.find(preset => preset.id === p)).map(p => (
-              <button
-                key={p}
-                onClick={() => togglePref(p)}
-                className="px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border bg-blue-600 dark:bg-blue-500 text-white border-blue-500 dark:border-blue-400 shadow-md shadow-blue-500/20 dark:shadow-none"
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex gap-2">
-            <input 
-              type="text" 
-              value={customPref}
-              onChange={(e) => setCustomPref(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && customPref) {
-                  if (!prefs.includes(customPref)) setPrefs([...prefs, customPref]);
-                  setCustomPref('');
-                }
-              }}
-              className="flex-1 bg-slate-50 dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-sm text-slate-800 dark:text-slate-200"
-              placeholder="Add custom interest (e.g. Photography)..."
-            />
-            <button 
-              onClick={() => {
-                if (customPref && !prefs.includes(customPref)) {
-                  setPrefs([...prefs, customPref]);
-                  setCustomPref('');
-                }
-              }}
-              className="bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-800 px-6 rounded-xl font-medium hover:bg-blue-100 dark:hover:bg-blue-800/60 transition-colors"
             >
-              Add
+              {t.analyticsConsentAccept}
+            </button>
+            <button
+              type="button"
+              onClick={() => setLocalAnalyticsConsent(false)}
+              className={cn(
+                "rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors",
+                localAnalyticsConsent === false
+                  ? "border-slate-300 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                  : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-400 dark:hover:bg-slate-800/60"
+              )}
+            >
+              {t.analyticsConsentDecline}
             </button>
           </div>
         </div>
+        )}
+
+        <ContentPreferencesSection
+          title={t.preferencesTitle || 'Content Preferences'}
+          presetPreferences={PRESET_PREFS}
+          preferences={prefs}
+          customPreference={customPref}
+          onTogglePreference={togglePref}
+          onCustomPreferenceChange={setCustomPref}
+          onAddCustomPreference={handleAddCustomPreference}
+        />
+
+        <GoalThemeSection
+          dailyGoalTitle={t.dailyGoal || 'Daily Goal'}
+          themeTitle={t.themePreference || 'Theme Preferences'}
+          dailyGoal={localDailyGoal}
+          theme={theme}
+          onDailyGoalChange={setLocalDailyGoal}
+          onToggleTheme={toggleTheme}
+        />
 
         <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 md:p-8 shadow-sm border border-blue-50 dark:border-slate-800 transition-colors">
-          <div className="flex items-center gap-3 mb-6">
-            <Target className="text-orange-500 dark:text-orange-400 transition-colors" size={24} />
-            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 transition-colors">{t.dailyGoal || 'Daily Goal'}</h2>
+          <div className="flex items-center gap-3 mb-4">
+            <FileJson className="text-emerald-500 dark:text-emerald-400 transition-colors" size={24} />
+            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 transition-colors">{t.configBackupTitle}</h2>
           </div>
-          
-          <div className="flex flex-col gap-6">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-600 dark:text-slate-400 font-medium">Target words per day</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min="1"
-                  max="100"
-                  value={localDailyGoal}
-                  onChange={(e) => setLocalDailyGoal(Math.max(1, parseInt(e.target.value) || 1))}
-                  className="w-20 px-3 py-2 text-center bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-orange-600 dark:text-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
-                />
-                <span className="text-slate-500 dark:text-slate-400 font-medium">words</span>
-              </div>
-            </div>
-            
-            <input 
-              type="range" 
-              min="1" 
-              max="100" 
-              value={localDailyGoal}
-              onChange={(e) => setLocalDailyGoal(parseInt(e.target.value))}
-              className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-orange-500 dark:accent-orange-400"
-            />
-            
-            <div className="flex justify-between text-xs text-slate-400 dark:text-slate-500 font-medium px-1">
-              <span>1</span>
-              <span>25</span>
-              <span>50</span>
-              <span>75</span>
-              <span>100</span>
-            </div>
-          </div>
-        </div>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+            {t.configBackupDesc}
+          </p>
 
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 md:p-8 shadow-sm border border-blue-50 dark:border-slate-800 transition-colors">
-          <div className="flex items-center gap-3 mb-6">
-            <Sun className="text-amber-500 dark:hidden transition-colors" size={24} />
-            <Moon className="hidden dark:block text-blue-400 transition-colors" size={24} />
-            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 transition-colors">{t.themePreference || 'Theme Preferences'}</h2>
-          </div>
-          
-          <div className="flex flex-col gap-6">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-600 dark:text-slate-400 font-medium">Theme</span>
-              <button
-                onClick={toggleTheme}
-                className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors font-medium text-slate-700 dark:text-slate-300"
-              >
-                {theme === 'dark' ? (
-                  <>
-                    <Moon size={18} className="text-blue-400" />
-                    <span>Dark Mode</span>
-                  </>
-                ) : (
-                  <>
-                    <Sun size={18} className="text-amber-500" />
-                    <span>Light Mode</span>
-                  </>
-                )}
-              </button>
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={handleExportConfig}
+              disabled={isConfigBackupBusy}
+              className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-semibold text-sm hover:bg-emerald-100 dark:hover:bg-emerald-800/50 transition-colors disabled:opacity-50"
+            >
+              {isConfigBackupBusy ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+              {t.exportConfig}
+            </button>
+
+            <label className={cn(
+              "flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-semibold text-sm hover:bg-blue-100 dark:hover:bg-blue-800/50 transition-colors",
+              isConfigBackupBusy ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+            )}>
+              {isConfigBackupBusy ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+              {t.importConfig}
+              <input
+                ref={configImportInputRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                disabled={isConfigBackupBusy}
+                onChange={handleImportConfig}
+              />
+            </label>
           </div>
         </div>
 
@@ -875,7 +883,7 @@ export function Setup() {
                       <button 
                         onClick={() => setViewingDeckId(deck.id)}
                         className="p-2 rounded-xl text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
-                        title="View Deck Words"
+                        title={t.viewDeckWords}
                       >
                         <List size={18} />
                       </button>
@@ -884,7 +892,7 @@ export function Setup() {
                           onClick={() => setActiveDeckId(deck.id)}
                           className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-sm font-medium hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
                         >
-                          Select
+                          {t.select}
                         </button>
                       )}
                       <button 
@@ -909,68 +917,63 @@ export function Setup() {
         <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 md:p-8 shadow-sm border border-blue-50 dark:border-slate-800 transition-colors">
           <div className="flex items-center gap-3 mb-6">
             <Database className="text-indigo-500 dark:text-indigo-400 transition-colors" size={24} />
-            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 transition-colors">{t.offlineDictionary || 'Offline Dictionary'}</h2>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 transition-colors">{t.offlineDictionary}</h2>
           </div>
           
           <div className="space-y-4">
             <p className="text-sm text-slate-500 dark:text-slate-400">
-              {t.offlineDictionaryDesc || "Download the comprehensive ECDICT database (CSV format) directly into your browser's IndexedDB for lightning-fast, offline word lookups."}
+              {t.offlineDictionaryDesc}
             </p>
             
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 gap-4">
               <div>
                 <p className="font-semibold text-slate-700 dark:text-slate-300">
-                  {dictStatus.isLoaded ? (t.dictionaryAvailable || 'Dictionary Available') : (t.dictionaryMissing || 'Dictionary Missing')}
+                  {dictStatus.isLoaded ? t.dictionaryAvailable : t.dictionaryMissing}
                 </p>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 mb-2">
-                  {dictStatus.isLoaded ? `${dictStatus.count.toLocaleString()} ${t.wordsLoaded || 'words loaded.'}` : (t.notLoaded || 'Not loaded. Search will fallback to mock data.')}
+                  {dictStatus.isLoaded ? `${dictStatus.count.toLocaleString()} ${t.wordsLoaded}` : t.notLoaded}
                 </p>
                 {!dictStatus.isLoaded && (
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    Download it <a href="https://github.com/skywind3000/ECDICT/raw/refs/heads/master/ecdict.csv" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">from here</a> first.
+                    {t.dictionaryDownloadHintBefore} <a href={ECDICT_DOWNLOAD_URL} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">{t.dictionaryMirrorLink}</a> {t.dictionaryDownloadHintAfter}
                   </p>
                 )}
               </div>
               
               {!dictProgress ? (
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDownloadDictionary}
+                    className="px-4 py-2 bg-blue-500 text-white rounded-xl font-medium text-sm hover:bg-blue-600 transition-colors shadow-sm shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  >
+                    <Download size={16} />
+                    {t.downloadOnline}
+                  </button>
+
                   <label className="cursor-pointer px-4 py-2 bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 rounded-xl font-medium text-sm hover:bg-indigo-100 dark:hover:bg-indigo-800/60 transition-colors">
-                    {t.uploadCsv || 'Upload CSV'}
+                    {t.uploadCsv}
                     <input
                       type="file"
                       accept=".csv"
                       className="hidden"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        
-                        try {
-                          setDictProgress({ status: 'starting' });
-                          const { importDictionaryFromBlob } = await import('../services/dictionaryDb');
-                          await importDictionaryFromBlob(file, setDictProgress);
-                          
-                          // After completion, update the UI
-                          const { getDictionaryWordCount } = await import('../services/dictionaryDb');
-                          const count = await getDictionaryWordCount();
-                          setDictStatus({ isLoaded: count > 0, count });
-                        } catch (err) {
-                          console.error('Failed to import', err);
-                          setDictProgress({ status: 'error' });
-                        } finally {
-                          setDictProgress(null);
-                        }
-                      }}
+                      onChange={handleUploadDictionary}
                     />
                   </label>
                 </div>
               ) : (
-                <div className="text-right">
+                <div className="text-right min-w-[180px]">
                   <span className="text-xs font-semibold text-indigo-500 block mb-1">
-                    {dictProgress.status === 'fetching' ? 'Initiating...' :
-                     dictProgress.status === 'downloading' ? `Downloading: ${dictProgress.loaded ? (dictProgress.loaded / 1024 / 1024).toFixed(1) : 0} MB` :
-                     dictProgress.status === 'parsing' ? `Parsing: ${dictProgress.rowsProcessed?.toLocaleString() || 0} words...` :
-                     dictProgress.status === 'error' ? 'Error occurred' : 'Please wait...'}
+                    {getDictionaryProgressLabel()}
                   </span>
+                  {dictProgress.status === 'downloading' && getDictionaryProgressPercent() !== null && (
+                    <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-indigo-100 dark:bg-indigo-900/40">
+                      <div
+                        className="h-full rounded-full bg-indigo-500 transition-all"
+                        style={{ width: `${getDictionaryProgressPercent() || 0}%` }}
+                      />
+                    </div>
+                  )}
                   <Loader2 size={16} className="text-indigo-500 animate-spin inline-block" />
                 </div>
               )}
@@ -978,9 +981,9 @@ export function Setup() {
 
             {dictStatus.isLoaded && (
               <div className="mt-6 border-t border-slate-100 dark:border-slate-800 pt-6">
-                <h3 className="font-semibold text-slate-700 dark:text-slate-300 mb-3">{t.createDeckFromTag || 'Create Deck from Tag'}</h3>
+                <h3 className="font-semibold text-slate-700 dark:text-slate-300 mb-3">{t.createDeckFromTag}</h3>
                 <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
-                  Select a tag to extract words from your offline dictionary.
+                  {t.tagDeckDesc}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {ECDICT_TAGS.map(tagObj => (
@@ -998,7 +1001,7 @@ export function Setup() {
                 <div className="mt-4 flex items-center gap-2">
                   <input
                     type="text"
-                    placeholder="Custom tag (e.g. nmet)"
+                    placeholder={t.customTagPlaceholder}
                     value={customDeckTag}
                     onChange={(e) => setCustomDeckTag(e.target.value)}
                     disabled={isCreatingFromTag}
@@ -1009,7 +1012,7 @@ export function Setup() {
                     onClick={() => handleCreateDeckFromTag(customDeckTag.trim(), customDeckTag.trim())}
                     className="px-3 py-1.5 bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-xl font-medium text-sm hover:bg-blue-100 dark:hover:bg-blue-800/60 transition-colors disabled:opacity-50"
                   >
-                    Create
+                    {t.create}
                   </button>
                 </div>
               </div>
@@ -1022,7 +1025,7 @@ export function Setup() {
           className="w-full bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 dark:hover:bg-blue-600 text-white rounded-xl py-4 font-bold text-lg transition-all shadow-lg shadow-blue-500/30 dark:shadow-none flex items-center justify-center gap-2"
         >
           <Save size={20} />
-          {hasConfigured ? 'Save Settings' : 'Let\'s Go!'}
+          {hasConfigured ? t.saveSettings : t.letsGo}
         </button>
       </div>
 
@@ -1054,7 +1057,7 @@ export function Setup() {
               <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-2">
                 {viewingDeck.words.length === 0 ? (
                   <div className="py-12 text-center text-slate-500 dark:text-slate-400 font-medium">
-                    This deck is empty.
+                    {t.deckEmpty}
                   </div>
                 ) : (
                   viewingDeck.words.map(w => (
