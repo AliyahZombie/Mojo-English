@@ -1,20 +1,72 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Mojo - AI-Powered Language Learning 🧠🇺🇸
 
-# Run and deploy your AI Studio app
+Mojo is an intelligent, open-source English learning web application designed to help you master languages efficiently. It combines state-of-the-art Spaced Repetition Systems (SRS) with personalized AI assistance to create a comprehensive and engaging learning experience.
 
-This contains everything you need to run your app locally.
+## ✨ Key Features
 
-View your app in AI Studio: https://ai.studio/apps/4416a3bf-8c51-419a-954a-45f4d6f8af60
+- **Spaced Repetition (FSRS):** Utilizes the modern `ts-fsrs` algorithm for optimal memorization and review scheduling.
+- **Anki Deck Support:** Easily import your existing vocabulary decks (`.apkg` files).
+- **AI Chat Assistant:** Built-in AI tutor configured to help you understand words, grammar, and context. Supports multiple model providers:
+  - OpenAI Compatible endpoints
+  - Google Gemini
+  - Anthropic Claude
+- **Automated Notifications (via QStash):** Never miss a review! Set up daily CRON schedules connecting to your preferred webhook (e.g., Telegram bots, Discord webhooks) using Upstash QStash, sending push notifications reminding you to study.
+- **Local First & Privacy Friendly:** Utilizes browser IndexedDB (`idb`) to locally store your learning progress and dictionary.
+- **Polished UI:** A responsive, dark-mode-ready interface built with Tailwind CSS and Framer Motion.
 
-## Run Locally
+## 🚀 Tech Stack
 
-**Prerequisites:**  Node.js
+### Frontend
+- **React 19**
+- **Vite**
+- **Tailwind CSS v4** (with `clsx` & `tailwind-merge` for utility processing)
+- **Framer Motion** for smooth animations
+- **Lucide React** for crisp, scalable icons
 
+### State & Storage
+- **Zustand** for lightweight, robust state management
+- **IndexedDB** (`idb`) for client-side persistence
+- **sql.js** & **jszip** for parsing SQLite databases embedded inside Anki `.apkg` files
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+### Algorithms & AI
+- **ts-fsrs** for the Free Spaced Repetition Scheduler algorithm
+- **Google Gen AI SDK** and native `fetch` support for AI chat streaming
+
+### Infrastructure & Services
+- **Upstash QStash** for serverless CRON notifications (`@upstash/qstash`)
+
+## 🛠️ Setup & Development
+
+1. **Install Dependencies:**
+   ```bash
+   npm install
+   ```
+
+2. **Start the Development Server:**
+   ```bash
+   npm run dev
+   ```
+
+3. **Build for Production:**
+   ```bash
+   npm run build
+   ```
+
+## ⚙️ Configuration
+
+### AI Providers
+Head to the **Settings** / **Setup** page in the app to configure your preferred AI provider by entering the base URL, API Key, and selecting the model you wish to use.
+
+### Push Notifications
+To enable automated push notifications (e.g., to Telegram):
+1. Get a [QStash Token from Upstash](https://console.upstash.com/qstash).
+2. Set up your receiving Webhook URL (e.g., a Telegram Bot webhook).
+3. Add your QStash token and Webhook URL in the settings.
+4. Save your daily schedule (CRON) and test your delivery!
+
+## 📦 Importing Decks
+You can import any `.apkg` Anki file directly from the UI. The application utilizes a web-assembly compiled SQLite (`sql.js`) to extract cards and start scheduling them using the modern FSRS algorithm out of the box.
+
+---
+
+*Keep your streak alive with Mojo!*

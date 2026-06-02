@@ -9,6 +9,7 @@ import { News } from './pages/News';
 import { Writing } from './pages/Writing';
 import { Dictionary } from './pages/Dictionary';
 import { useAppStore } from './store/useAppStore';
+import { useMojoAnalytics } from './hooks/useMojoAnalytics';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const hasConfigured = useAppStore(state => state.hasConfigured);
@@ -22,6 +23,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const theme = useAppStore(state => state.theme);
+  useMojoAnalytics();
 
   useEffect(() => {
     if (theme === 'dark') {
@@ -49,4 +51,3 @@ export default function App() {
     </>
   );
 }
-
