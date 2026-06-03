@@ -21,36 +21,61 @@ function formatOfflineWord(word: EcdictWord): WordDetail {
   };
 }
 
-export async function searchDictionary(query: string, options?: { forceAi?: boolean }): Promise<WordDetail | null> {
+function mergeAiContentWithLocalMetadata(aiWord: WordDetail, localWord: EcdictWord | null, query: string): WordDetail {
+  if (!localWord) {
+    return {
+      ...aiWord,
+      tag: '',
+      bnc: 0,
+      frq: 0,
+      collins: 0,
+      oxford: 0,
+    };
+  }
+
+  const localDetail = formatOfflineWord(localWord);
+  return {
+    ...aiWord,
+    id: `ai-${localWord.word}`,
+    word: localDetail.word || aiWord.word || query,
+    phonetic: localDetail.phonetic || aiWord.phonetic,
+    tag: localDetail.tag,
+    bnc: localDetail.bnc,
+    frq: localDetail.frq,
+    exchange: localDetail.exchange,
+    collins: localDetail.collins,
+    oxford: localDetail.oxford,
+  };
+}
+
+export async function searchDictionary(query: string, options?: { forceAi?: boolean; preferLocal?: boolean }): Promise<WordDetail | null> {
   if (!query || query.trim() === '') return null;
   const normalizedQuery = query.trim().toLowerCase();
+  const localResult = await searchOfflineDictionary(query);
+
+  if (options?.preferLocal) {
+    return localResult ? formatOfflineWord(localResult) : null;
+  }
 
   if (!options?.forceAi) {
-    const localResult = await searchOfflineDictionary(query);
-    if (localResult) {
-      return formatOfflineWord(localResult);
-    }
-
     const cached = await getAiCache(normalizedQuery);
     if (cached) {
-      return cached;
+      return mergeAiContentWithLocalMetadata(cached, localResult, query);
+    }
+
+    if (localResult) {
+      return formatOfflineWord(localResult);
     }
   }
 
   try {
     const { chatCompletion } = await import('./llm');
-    const systemPrompt = `You are a dictionary API. Provide the definition of the word in JSON format exactly matching this schema:
+    const systemPrompt = `You are a dictionary API. Provide the meaning and examples of the word in JSON format exactly matching this schema:
 {
   "word": "<string>",
   "phonetic": "<string, phonetic transcription>",
   "translation": "<string, translation in Chinese>",
   "definition": "<string, English definition>",
-  "tag": "<string>",
-  "bnc": <number, 0 if unknown>,
-  "frq": <number, 0 if unknown>,
-  "exchange": "<string, variations>",
-  "collins": <number, 0-5>,
-  "oxford": <number, 1 or 0>,
   "detail": [
     { "en": "<string, example sentence>", "cn": "<string, translated sentence>" }
   ]
@@ -63,22 +88,23 @@ Return ONLY valid JSON.
     const cleanedResponse = response.replace(/^```json\n?/, '').replace(/```$/, '').trim();
     const result = JSON.parse(cleanedResponse);
     
-    const wordParam = {
+    const aiContent: WordDetail = {
       id: `ai-${result.word || query}`,
       word: result.word || query,
       phonetic: result.phonetic || '',
       translation: result.translation || '',
       definition: result.definition || '',
-      tag: result.tag || '',
-      bnc: parseInt(result.bnc) || 0,
-      frq: parseInt(result.frq) || 0,
-      exchange: result.exchange || '',
-      collins: parseInt(result.collins) || 0,
-      oxford: parseInt(result.oxford) || 0,
+      tag: '',
+      bnc: 0,
+      frq: 0,
+      exchange: '',
+      collins: 0,
+      oxford: 0,
       detail: result.detail || []
     };
+    const wordParam = mergeAiContentWithLocalMetadata(aiContent, localResult, query);
 
-    await setAiCache(normalizedQuery, wordParam);
+    await setAiCache(normalizedQuery, aiContent);
     return wordParam;
   } catch (error) {
     console.error("Dictionary lookup failed using LLM", error);

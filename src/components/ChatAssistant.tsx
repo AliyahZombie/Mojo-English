@@ -10,6 +10,14 @@ import remarkGfm from 'remark-gfm';
 
 const getErrorMessage = (error: unknown, language: Language) => error instanceof Error ? error.message : translations[language].chatFetchError;
 
+const consumedAutoSendRequestIds = new Set<string>();
+
+interface AutoSendRequest {
+  id: string;
+  message: string;
+  displayMessage?: string;
+}
+
 interface ChatAssistantProps {
   contextId: string; // Used to isolate conversations
   title?: string;
@@ -18,6 +26,10 @@ interface ChatAssistantProps {
   className?: string;
   systemContext?: string; // Any context to inject silently or conceptually
   isEmbedded?: boolean;
+  attachedContext?: string | null;
+  attachedContextLabel?: string;
+  onClearAttachedContext?: () => void;
+  autoSendRequest?: AutoSendRequest | null;
 }
 
 export function ChatAssistant({ 
@@ -26,7 +38,11 @@ export function ChatAssistant({
   description,
   onClose,
   className,
-  systemContext
+  systemContext,
+  attachedContext,
+  attachedContextLabel,
+  onClearAttachedContext,
+  autoSendRequest,
 }: ChatAssistantProps) {
   const { language } = useAppStore();
   const t = translations[language];
@@ -46,46 +62,52 @@ export function ChatAssistant({
     scrollToBottom();
   }, [messages, isTyping]);
 
-  const handleSend = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (!input.trim() || isTyping) return;
+  const sendMessage = async (message: string, options?: { displayMessage?: string }) => {
+    const userText = message.trim();
+    if (!userText || isTyping) return;
+    const visibleUserText = options?.displayMessage?.trim() || userText;
 
-    const userText = input;
+    const effectiveUserText = attachedContext
+      ? `${t.selectedSentencePrompt}\n"""${attachedContext}"""\n\n${userText}`
+      : userText;
+
     setInput('');
+    onClearAttachedContext?.();
     setIsTyping(true);
+
+    const currentMessages = useChatStore.getState().sessions[contextId] || [];
 
     addMessage(contextId, {
       id: Date.now().toString(),
       role: 'user',
       type: 'text',
-      content: userText,
+      content: visibleUserText,
       createdAt: Date.now()
     });
 
-    // Mocking streaming response
     const assistantMessageId = (Date.now() + 1).toString();
     addMessage(contextId, {
       id: assistantMessageId,
       role: 'assistant',
       type: 'text',
-      content: '', // Start empty
+      content: '',
       createdAt: Date.now()
     });
 
     try {
       const { streamChatCompletion } = await import('../services/llm');
-      
-      const sessionHistory = messages.map(m => ({
+
+      const sessionHistory = currentMessages.map(m => ({
         role: m.role,
         content: m.content
       }));
-      
-      sessionHistory.push({ role: 'user', content: userText });
-      
+
+      sessionHistory.push({ role: 'user', content: effectiveUserText });
+
       await streamChatCompletion(sessionHistory, systemContext || t.helpfulAssistantPrompt, (partialContent, partialReasoning) => {
         updateMessage(contextId, assistantMessageId, { content: partialContent, reasoning: partialReasoning });
       }, { task: 'assistant-chat' });
-      
+
     } catch (error) {
       console.error(error);
       updateMessage(contextId, assistantMessageId, { content: `Error: ${getErrorMessage(error, language)}` });
@@ -93,6 +115,24 @@ export function ChatAssistant({
       setIsTyping(false);
     }
   };
+
+  const handleSend = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    await sendMessage(input);
+  };
+
+  useEffect(() => {
+    if (!autoSendRequest || consumedAutoSendRequestIds.has(autoSendRequest.id)) {
+      return;
+    }
+
+    if (isTyping) {
+      return;
+    }
+
+    consumedAutoSendRequestIds.add(autoSendRequest.id);
+    void sendMessage(autoSendRequest.message, { displayMessage: autoSendRequest.displayMessage });
+  }, [autoSendRequest, isTyping]);
 
   const clearChat = () => {
     useAppStore.getState().showAlert({
@@ -229,6 +269,24 @@ export function ChatAssistant({
       </div>
 
       <div className="p-3 md:p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-[#0B1120]/50 backdrop-blur z-10 shrink-0">
+        {attachedContext && (
+          <div className="mb-2 rounded-2xl border border-blue-100 dark:border-blue-900/50 bg-blue-50/70 dark:bg-blue-900/20 p-3 text-xs text-slate-600 dark:text-slate-300">
+            <div className="mb-1 flex items-center justify-between gap-2 font-bold text-blue-600 dark:text-blue-400">
+              <span>{attachedContextLabel || t.selectedSentence}</span>
+              {onClearAttachedContext && (
+                <button
+                  type="button"
+                  onClick={onClearAttachedContext}
+                  className="rounded-full p-1 text-blue-400 hover:bg-blue-100 hover:text-blue-600 dark:hover:bg-blue-900/50 dark:hover:text-blue-300"
+                  aria-label={t.clearSelectedSentence}
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+            <p className="line-clamp-2 leading-relaxed">“{attachedContext}”</p>
+          </div>
+        )}
         <form onSubmit={handleSend} className="relative flex items-end">
           <textarea
             value={input}

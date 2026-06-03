@@ -88,6 +88,16 @@ export async function chatCompletion(messages: ChatCompletionMessage[], systemPr
   const provider = providerArray.find(p => p.id === activeProviderId);
   
   if (!provider) throw new Error('No active provider found');
+  return providerChatCompletion(provider, messages, systemPrompt, options);
+}
+
+async function providerChatCompletion(
+  provider: Provider,
+  messages: ChatCompletionMessage[],
+  systemPrompt?: string,
+  options?: LlmRequestOptions,
+  maxTokens?: number,
+) {
   const apiKey = provider.apiKey;
   if (!apiKey) throw new Error(`API key is missing for ${provider.name}`);
   const model = resolveModel(provider, options?.task);
@@ -110,6 +120,7 @@ export async function chatCompletion(messages: ChatCompletionMessage[], systemPr
       body: JSON.stringify({
         model,
         messages: processedMessages,
+        ...(maxTokens ? { max_tokens: maxTokens } : {}),
       })
     });
 
@@ -130,11 +141,12 @@ export async function chatCompletion(messages: ChatCompletionMessage[], systemPr
     if (systemPrompt) {
       body.systemInstruction = { parts: [{ text: systemPrompt }] };
     }
+    const requestBody = maxTokens ? { ...body, generationConfig: { maxOutputTokens: maxTokens } } : body;
 
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(requestBody)
     });
 
     if (!res.ok) throw new Error(await res.text());
@@ -155,7 +167,7 @@ export async function chatCompletion(messages: ChatCompletionMessage[], systemPr
       },
       body: JSON.stringify({
         model,
-        max_tokens: 4096,
+        max_tokens: maxTokens ?? 4096,
         system: systemPrompt,
         messages: messages.map(m => ({
           role: m.role === 'assistant' ? 'assistant' : 'user',
@@ -170,6 +182,22 @@ export async function chatCompletion(messages: ChatCompletionMessage[], systemPr
   }
   
   throw new Error('Unsupported provider type');
+}
+
+export async function testProviderConnection(provider: Provider) {
+  const response = await providerChatCompletion(
+    provider,
+    [{ role: 'user', content: 'Reply with OK only.' }],
+    'You are a connectivity test endpoint. Reply with OK only.',
+    undefined,
+    8,
+  );
+
+  if (!response || !response.trim()) {
+    throw new Error('Provider returned an empty response');
+  }
+
+  return response.trim();
 }
 
 export async function streamChatCompletion(

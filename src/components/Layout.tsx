@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Layers, Newspaper, PenTool, Settings, BookA, ChevronLeft, Languages, Wand2 } from 'lucide-react';
+import { Home, Layers, Newspaper, PenTool, Settings, BookA, ChevronLeft, Languages, MessageCircle, BookOpenText } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppStore } from '../store/useAppStore';
 import { Logo } from './Logo';
@@ -16,6 +16,7 @@ export function Navigation() {
   const links = [
     { name: t.dashboard, path: '/', icon: Home },
     { name: t.words, path: '/words', icon: Layers },
+    { name: t.story, path: '/stories', icon: BookOpenText },
     { name: t.news, path: '/news', icon: Newspaper },
     { name: t.writing, path: '/writing', icon: PenTool },
   ];
@@ -86,6 +87,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const isHome = location.pathname === '/';
   const showHeader = hasConfigured;
+  const hideMobileHeader = location.pathname === '/words';
   const locationState = location.state as { from?: string } | null;
   const searchParams = new URLSearchParams(location.search);
   const dictionaryReturnPath = location.pathname === '/dictionary'
@@ -98,7 +100,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <Navigation />
       <main className="flex-1 flex flex-col h-[100dvh] overflow-x-hidden overflow-y-auto min-w-0 w-full p-4 md:p-8 gap-4 md:gap-6 relative z-0">
         {showHeader && (
-          <header className="flex justify-between items-center mb-0 md:mb-2 bg-white/40 dark:bg-slate-900/40 md:bg-transparent backdrop-blur-sm md:backdrop-blur-none p-3 md:p-0 rounded-2xl md:rounded-none">
+          <header className={cn(
+            "justify-between items-center mb-0 md:mb-2 bg-white/40 dark:bg-slate-900/40 md:bg-transparent backdrop-blur-sm md:backdrop-blur-none p-3 md:p-0 rounded-2xl md:rounded-none",
+            hideMobileHeader ? "hidden md:flex" : "flex"
+          )}>
             <div className="flex items-center gap-2">
               {!isHome && (
                 <Link 
@@ -116,6 +121,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               ) : (
                 <span className="font-bold text-xl md:text-2xl text-slate-800 dark:text-slate-200 tracking-tight capitalize">
                   {location.pathname === '/words' ? t.words : 
+                   location.pathname === '/stories' ? t.story :
                    location.pathname === '/news' ? t.news : 
                    location.pathname === '/writing' ? t.writing : 
                    location.pathname === '/dictionary' ? t.dictionary : 
@@ -138,7 +144,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 )} 
                 title={t.aiAssistantTitle}
               >
-                <Wand2 size={20} />
+                <MessageCircle size={20} />
               </button>
               <Link to="/setup" className="md:hidden p-2 rounded-xl text-slate-400 dark:text-slate-500 hover:bg-white/50 dark:hover:bg-slate-800/50 transition-colors" title={t.setup}>
                 <Settings size={20} />

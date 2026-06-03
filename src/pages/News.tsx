@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { CheckCircle2, ChevronLeft, Search, BookA, Send, Loader2, RefreshCw } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, Search, BookA, Send, Loader2, RefreshCw, Languages, MessageCircle } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { cn } from '../lib/utils';
 import { ChatAssistant } from '../components/ChatAssistant';
 import { useAppStore } from '../store/useAppStore';
 import { translations } from '../lib/i18n';
+import { searchDictionary } from '../services/dictionaryApi';
 import { loadNewsFeedPageWithCache, enrichNewsArticle, evaluateNewsShortAnswer } from '../services/newsPipeline';
 import { getCachedNewsArticle } from '../services/dictionaryDb';
 import type { EnrichedNewsArticle, NewsFeedItem } from '../services/newsTypes';
 import type { NewsQuizArticleState } from '../store/useAppStore';
+import type { WordDetail } from '../components/WordCard';
 
 type NewsTranslation = typeof translations.en;
+type NewsReadStatus = 'completed' | 'reading' | 'unread';
 
 type CaretPositionDocument = Document & {
   caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
@@ -43,6 +46,11 @@ export function News() {
   const [errorMessage, setErrorMessage] = useState('');
   const [isEvaluatingShortAnswer, setIsEvaluatingShortAnswer] = useState(false);
   const [selectedWord, setSelectedWord] = useState('');
+  const [selectedText, setSelectedText] = useState('');
+  const [dictionaryResult, setDictionaryResult] = useState<WordDetail | null>(null);
+  const [isDictionaryLoading, setIsDictionaryLoading] = useState(false);
+  const [assistantAttachedText, setAssistantAttachedText] = useState('');
+  const [autoSendRequest, setAutoSendRequest] = useState<{ id: string; message: string; displayMessage?: string } | null>(null);
   const [popoverPos, setPopoverPos] = useState({ x: 0, y: 0 });
   const [visibleCount, setVisibleCount] = useState(10);
   const [refreshRequestId, setRefreshRequestId] = useState(0);
@@ -143,7 +151,40 @@ export function News() {
 
   useEffect(() => {
     setSelectedWord('');
+    setSelectedText('');
+    setDictionaryResult(null);
+    setAssistantAttachedText('');
   }, [selectedArticleId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!selectedWord) {
+      setDictionaryResult(null);
+      setIsDictionaryLoading(false);
+      return;
+    }
+
+    setIsDictionaryLoading(true);
+    setDictionaryResult(null);
+    void searchDictionary(selectedWord, { preferLocal: true }).then((result) => {
+      if (!cancelled) {
+        setDictionaryResult(result);
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setDictionaryResult(null);
+      }
+    }).finally(() => {
+      if (!cancelled) {
+        setIsDictionaryLoading(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedWord]);
 
   useEffect(() => {
     let cancelled = false;
@@ -225,22 +266,34 @@ export function News() {
     const handleSelectionChange = () => {
       const selection = window.getSelection();
       if (selection && selection.toString().trim() !== '') {
-        const text = selection.toString().trim();
-        if (text.split(/\s+/).length <= 3 && /^[a-zA-Z\s\-']+$/.test(text)) {
-          setSelectedWord(text);
-          const range = selection.getRangeAt(0);
-          const rect = range.getBoundingClientRect();
-          setPopoverPos({ x: rect.left + rect.width / 2, y: rect.top });
-        } else {
-          setSelectedWord('');
+        if (selection.rangeCount === 0) {
+          return;
         }
+
+        const text = selection.toString().trim();
+        const range = selection.getRangeAt(0);
+        const articleContent = document.querySelector('.article-content');
+        if (!articleContent || !articleContent.contains(range.commonAncestorContainer)) {
+          setSelectedText('');
+          return;
+        }
+
+        const rect = range.getBoundingClientRect();
+        if (rect.width > 0 || rect.height > 0) {
+          setSelectedWord('');
+          setSelectedText(text);
+          setPopoverPos({ x: rect.left + rect.width / 2, y: rect.top });
+        }
+      } else {
+        setSelectedText('');
       }
     };
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement;
-      if (!target.closest('#dict-popover') && !target.closest('.article-content') && window.getSelection()?.isCollapsed) {
+      if (!target.closest('#dict-popover') && !target.closest('#selection-popover') && !target.closest('.article-content') && window.getSelection()?.isCollapsed) {
         setSelectedWord('');
+        setSelectedText('');
       }
     };
 
@@ -283,11 +336,44 @@ export function News() {
 
     const word = text.slice(start, end).trim();
     if (word && word.length >= 2 && /^[a-zA-Z\-']+$/.test(word)) {
+      setSelectedText('');
       setSelectedWord(word);
       setPopoverPos({ x: event.clientX, y: event.clientY - 20 });
     } else {
       setSelectedWord('');
     }
+  };
+
+  const openAssistantPanel = () => {
+    if (!useAppStore.getState().isAssistantOpen) {
+      toggleAssistant();
+    }
+  };
+
+  const clearArticleSelection = () => {
+    window.getSelection()?.removeAllRanges();
+    setSelectedText('');
+  };
+
+  const handleTranslateSelection = () => {
+    const text = selectedText.trim();
+    if (!text) return;
+    setAssistantAttachedText('');
+    setAutoSendRequest({
+      id: `${Date.now()}-translate`,
+      message: `${t.translateSelectionPrompt}\n\n"""${text}"""`,
+      displayMessage: `${t.translateSelection}: “${text}”`,
+    });
+    clearArticleSelection();
+    openAssistantPanel();
+  };
+
+  const handleAskMojoSelection = () => {
+    const text = selectedText.trim();
+    if (!text) return;
+    setAssistantAttachedText(text);
+    clearArticleSelection();
+    openAssistantPanel();
   };
 
   const handleBack = () => {
@@ -430,6 +516,7 @@ export function News() {
 
               {orderedItems.map((article) => {
                 const details = articleDetailsById[article.id];
+                const readStatus = getNewsReadStatus(newsQuizStates[article.id]);
                 return (
                   <motion.div
                     whileHover={{ y: -2 }}
@@ -446,6 +533,12 @@ export function News() {
                             {t.match} {details.recommendationScore}
                           </span>
                         ) : null}
+                        <span className={cn(
+                          'text-[10px] md:text-xs font-bold px-2.5 py-1 rounded uppercase tracking-widest transition-colors',
+                          getNewsReadStatusClassName(readStatus),
+                        )}>
+                          {getNewsReadStatusLabel(readStatus, t)}
+                        </span>
                         <span className="text-slate-400 dark:text-slate-500 text-[10px] md:text-xs font-bold ml-auto bg-slate-50 dark:bg-slate-800/50 px-2.5 py-1 rounded transition-colors">
                           {details?.readTime || t.preview}
                         </span>
@@ -675,6 +768,10 @@ export function News() {
                     title={t.articleAssistant}
                     description={t.discussArticle}
                     systemContext={`The user is reading an article titled "${selectedArticle.title}". Full text:\n\n${selectedArticle.paragraphs.join('\n\n')}`}
+                    attachedContext={assistantAttachedText}
+                    attachedContextLabel={t.selectedSentence}
+                    onClearAttachedContext={() => setAssistantAttachedText('')}
+                    autoSendRequest={autoSendRequest}
                     className="h-[600px] shadow-sm"
                   />
                 </motion.div>
@@ -701,15 +798,19 @@ export function News() {
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               className="fixed left-0 right-0 bottom-0 h-[80vh] z-50 rounded-t-3xl border-t border-slate-100 dark:border-slate-800 flex flex-col xl:hidden bg-white dark:bg-slate-900 shadow-[0_-10px_40px_rgba(0,0,0,0.1)]"
             >
-              <ChatAssistant
-                contextId={`news_${selectedArticleId}`}
-                title={t.articleAssistant}
-                description={t.discussArticle}
-                systemContext={`The user is reading an article titled "${selectedArticle.title}". Full text:\n\n${selectedArticle.paragraphs.join('\n\n')}`}
-                onClose={toggleAssistant}
-                className="rounded-none border-none shadow-none h-full"
-                isEmbedded={true}
-              />
+                <ChatAssistant
+                  contextId={`news_${selectedArticleId}`}
+                  title={t.articleAssistant}
+                  description={t.discussArticle}
+                  systemContext={`The user is reading an article titled "${selectedArticle.title}". Full text:\n\n${selectedArticle.paragraphs.join('\n\n')}`}
+                  onClose={toggleAssistant}
+                  attachedContext={assistantAttachedText}
+                  attachedContextLabel={t.selectedSentence}
+                  onClearAttachedContext={() => setAssistantAttachedText('')}
+                  autoSendRequest={autoSendRequest}
+                  className="rounded-none border-none shadow-none h-full"
+                  isEmbedded={true}
+                />
             </motion.div>
           </>
         )}
@@ -722,17 +823,69 @@ export function News() {
             initial={{ opacity: 0, y: 10, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.95 }}
-            className="fixed z-[100] bottom-24 left-1/2 transform -translate-x-1/2 shadow-2xl md:bottom-auto md:left-[var(--popover-x)] md:top-[var(--popover-y)] md:-translate-y-full md:pb-3"
+            className="fixed z-[100] bottom-0 left-0 right-0 rounded-t-3xl border border-blue-100 bg-white p-5 shadow-2xl dark:border-slate-800 dark:bg-slate-900 md:right-auto md:bottom-auto md:left-[var(--popover-x)] md:top-[var(--popover-y)] md:w-80 md:-translate-x-1/2 md:-translate-y-full md:rounded-3xl md:p-4 md:pb-3"
             style={{ '--popover-x': `${popoverPos.x}px`, '--popover-y': `${popoverPos.y}px` } as React.CSSProperties}
           >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <div className="font-bold text-slate-800 dark:text-slate-100">{selectedWord}</div>
+                {dictionaryResult?.phonetic && (
+                  <div className="mt-1 text-sm font-medium text-slate-400 dark:text-slate-500">/{dictionaryResult.phonetic}/</div>
+                )}
+              </div>
+              {isDictionaryLoading && <Loader2 size={16} className="mt-1 animate-spin text-blue-500" />}
+            </div>
+
+            <div className="max-h-48 space-y-3 overflow-y-auto text-sm leading-relaxed text-slate-600 dark:text-slate-300">
+              {dictionaryResult?.translation && (
+                <p className="whitespace-pre-line font-medium">{dictionaryResult.translation}</p>
+              )}
+              {dictionaryResult?.definition && (
+                <p className="whitespace-pre-line text-xs italic text-slate-500 dark:text-slate-400">{dictionaryResult.definition}</p>
+              )}
+              {!isDictionaryLoading && !dictionaryResult && (
+                <p className="text-slate-400 dark:text-slate-500">{t.noResult}</p>
+              )}
+            </div>
+
             <Link
               to={`/dictionary?q=${encodeURIComponent(selectedWord.toLowerCase())}&from=${encodeURIComponent(dictionaryReturnPath)}`}
               state={{ from: dictionaryReturnPath, returnLabel: selectedArticleId ? t.backToArticle : t.backToNews }}
-              className="flex items-center gap-2 bg-slate-900 dark:bg-blue-600 text-white px-4 py-2.5 rounded-2xl shadow-xl hover:scale-105 active:scale-95 transition-all outline-none font-medium text-sm whitespace-nowrap"
+              className="mt-4 flex items-center justify-center gap-2 border-t border-blue-50 pt-3 text-sm font-bold text-blue-600 transition-colors hover:text-blue-700 dark:border-slate-800 dark:text-blue-400 dark:hover:text-blue-300"
             >
               <BookA size={16} />
-              {t.lookUp} "{selectedWord.length > 15 ? `${selectedWord.substring(0, 15)}...` : selectedWord}"
+              {t.openDictionary}
             </Link>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {selectedText && (
+          <motion.div
+            id="selection-popover"
+            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+            className="fixed z-[100] bottom-6 left-1/2 flex -translate-x-1/2 gap-2 rounded-2xl border border-blue-100 bg-white/95 p-2 shadow-2xl backdrop-blur dark:border-slate-800 dark:bg-slate-900/95 md:bottom-auto md:left-[var(--popover-x)] md:top-[var(--popover-y)] md:-translate-y-full"
+            style={{ '--popover-x': `${popoverPos.x}px`, '--popover-y': `${popoverPos.y}px` } as React.CSSProperties}
+          >
+            <button
+              type="button"
+              onClick={handleTranslateSelection}
+              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-sm font-bold text-white shadow-sm transition-colors hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+            >
+              <Languages size={16} />
+              {t.translateSelection}
+            </button>
+            <button
+              type="button"
+              onClick={handleAskMojoSelection}
+              className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-bold text-white shadow-sm transition-colors hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600"
+            >
+              <MessageCircle size={16} />
+              {t.askMojo}
+            </button>
           </motion.div>
         )}
       </AnimatePresence>
@@ -758,6 +911,42 @@ function createDefaultNewsQuizArticleState(): NewsQuizArticleState {
     shortAnswerDraft: '',
     shortAnswerEvaluation: null,
   };
+}
+
+function getNewsReadStatus(state: NewsQuizArticleState | undefined): NewsReadStatus {
+  if (state?.shortAnswerEvaluation) {
+    return 'completed';
+  }
+
+  if (state?.shortAnswerDraft.trim()) {
+    return 'reading';
+  }
+
+  return 'unread';
+}
+
+function getNewsReadStatusLabel(status: NewsReadStatus, t: NewsTranslation) {
+  if (status === 'completed') {
+    return t.newsStatusCompleted;
+  }
+
+  if (status === 'reading') {
+    return t.newsStatusReading;
+  }
+
+  return t.newsStatusUnread;
+}
+
+function getNewsReadStatusClassName(status: NewsReadStatus) {
+  if (status === 'completed') {
+    return 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400';
+  }
+
+  if (status === 'reading') {
+    return 'bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400';
+  }
+
+  return 'bg-slate-50 text-slate-400 dark:bg-slate-800/50 dark:text-slate-500';
 }
 
 function buildPlaceholderArticle(item: NewsFeedItem, t: NewsTranslation): EnrichedNewsArticle {

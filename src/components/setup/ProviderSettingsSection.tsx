@@ -1,4 +1,4 @@
-import { Sparkles, Trash2 } from 'lucide-react';
+import { Loader2, PlugZap, Sparkles, Trash2 } from 'lucide-react';
 import { CustomSelect } from '../ui/CustomSelect';
 import { LLM_TASK_LABELS, type LlmTask, type Provider } from '../../store/useAppStore';
 import { useAppStore } from '../../store/useAppStore';
@@ -13,6 +13,8 @@ type ProviderSettingsSectionProps = {
   onRemoveProvider: (providerId: string) => void;
   onProviderFieldChange: <K extends keyof Provider>(index: number, field: K, value: Provider[K]) => void;
   onFetchModels: (provider: Provider, index: number) => void;
+  onTestProvider: (provider: Provider) => void;
+  testingProviderId: string | null;
 };
 
 const providerTypeOptions = [
@@ -29,7 +31,8 @@ const taskLabelKeys: Record<LlmTask, keyof typeof translations.en> = {
   'dictionary-lookup': 'taskDictionaryLookup',
   'writing-evaluation': 'taskWritingEvaluation',
   'news-optimization': 'taskNewsOptimization',
-  'quiz-evaluation': 'taskQuizEvaluation'
+  'quiz-evaluation': 'taskQuizEvaluation',
+  'story-generation': 'taskStoryGeneration'
 };
 
 export function ProviderSettingsSection({
@@ -41,6 +44,8 @@ export function ProviderSettingsSection({
   onRemoveProvider,
   onProviderFieldChange,
   onFetchModels,
+  onTestProvider,
+  testingProviderId,
 }: ProviderSettingsSectionProps) {
   const { language } = useAppStore();
   const t = translations[language];
@@ -129,7 +134,7 @@ export function ProviderSettingsSection({
 
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1.5 transition-colors">{t.providerModel}</label>
-                <div className="flex gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row">
                   {provider.models.length > 0 ? (
                     <CustomSelect
                       className="flex-1"
@@ -149,9 +154,18 @@ export function ProviderSettingsSection({
 
                   <button
                     onClick={() => onFetchModels(provider, idx)}
-                    className="bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-800 px-4 rounded-xl font-medium hover:bg-blue-100 dark:hover:bg-blue-800/60 transition-colors"
+                    className="min-h-[48px] bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-800 px-4 rounded-xl font-medium hover:bg-blue-100 dark:hover:bg-blue-800/60 transition-colors"
                   >
                     {t.fetchModels}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onTestProvider(provider)}
+                    disabled={testingProviderId === provider.id}
+                    className="min-h-[48px] inline-flex items-center justify-center gap-2 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border border-emerald-100 dark:border-emerald-800 px-4 rounded-xl font-medium hover:bg-emerald-100 dark:hover:bg-emerald-800/50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {testingProviderId === provider.id ? <Loader2 size={16} className="animate-spin" /> : <PlugZap size={16} />}
+                    {testingProviderId === provider.id ? t.testingProvider : t.testProviderConnection}
                   </button>
                 </div>
               </div>
