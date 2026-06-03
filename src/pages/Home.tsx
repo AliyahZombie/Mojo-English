@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Flame, Clock, Glasses, Target, Newspaper, PenTool, Users } from 'lucide-react';
+import { Flame, Clock, Glasses, Target, Newspaper, PenTool, Users, BookA, BookOpenText } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppStore } from '../store/useAppStore';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -37,10 +37,11 @@ function StatCard({
 import { getLocalDateString, useFsrsStore } from '../store/useFsrsStore';
 
 export function Home() {
-  const { dailyGoal, language, isAssistantOpen, toggleAssistant, analyticsConsent, analyticsOnlineUsers, setAnalyticsConsent, showAlert } = useAppStore();
+  const { dailyGoal, language, isAssistantOpen, toggleAssistant, analyticsConsent, analyticsOnlineUsers, setAnalyticsConsent, showAlert, decks, activeDeckId } = useAppStore();
   const { getDailyStudiedCount, dailyStats } = useFsrsStore();
   const t = translations[language];
   const studiedToday = getDailyStudiedCount();
+  const activeDeck = decks.find(deck => deck.id === activeDeckId);
   
   const randomQuote = useMemo(() => {
     const quotes = t.quotes;
@@ -190,6 +191,29 @@ export function Home() {
           <div className="flex-1">
             <h3 className="text-sm md:text-lg font-bold text-slate-800 dark:text-slate-200">{t.writing}</h3>
             <p className="text-[10px] md:text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1">{t.practiceOutput}</p>
+          </div>
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 md:gap-6 mb-6">
+        <Link to="/stories" className="bg-white dark:bg-slate-900 rounded-2xl md:rounded-3xl p-4 md:p-6 shadow-sm border border-slate-100 dark:border-slate-800/60 flex items-center gap-3 md:gap-4 transition-all hover:-translate-y-1 hover:shadow-md group">
+          <div className="p-3 md:p-4 rounded-xl md:rounded-2xl bg-amber-50 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 group-hover:scale-110 transition-transform">
+            <BookOpenText size={24} className="w-5 h-5 md:w-6 md:h-6" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-sm md:text-lg font-bold text-slate-800 dark:text-slate-200">{t.story}</h3>
+            <p className="text-[10px] md:text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">{t.storyHomeSubtitle}</p>
+          </div>
+        </Link>
+        <Link to="/decks" className="bg-white dark:bg-slate-900 rounded-2xl md:rounded-3xl p-4 md:p-6 shadow-sm border border-slate-100 dark:border-slate-800/60 flex items-center gap-3 md:gap-4 transition-all hover:-translate-y-1 hover:shadow-md group">
+          <div className="p-3 md:p-4 rounded-xl md:rounded-2xl bg-purple-50 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400 group-hover:scale-110 transition-transform">
+            <BookA size={24} className="w-5 h-5 md:w-6 md:h-6" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-sm md:text-lg font-bold text-slate-800 dark:text-slate-200">{t.wordbook}</h3>
+            <p className="text-[10px] md:text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+              {activeDeck ? activeDeck.name : t.noCurrentWordbook}
+            </p>
           </div>
         </Link>
       </div>
