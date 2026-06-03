@@ -1,6 +1,88 @@
 import { useAppStore } from '../store/useAppStore';
+import type { LlmTask, Provider } from '../store/useAppStore';
 
-export async function chatCompletion(messages: any[], systemPrompt?: string) {
+type ChatCompletionMessage = {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+};
+
+type GeminiPart = {
+  text?: string;
+  thought?: boolean;
+};
+
+type StreamUpdate = (content: string, reasoning: string) => void;
+
+type LlmRequestOptions = {
+  task?: LlmTask;
+};
+
+const resolveModel = (provider: Provider, task?: LlmTask) => {
+  const taskModel = task ? provider.taskModels?.[task]?.trim() : '';
+  const model = taskModel || provider.activeModel.trim();
+  if (!model) {
+    throw new Error(`Model is missing for ${provider.name}${task ? ` (${task})` : ''}`);
+  }
+  return model;
+};
+
+const parseOpenAiCompatibleDelta = (data: string, onDelta: (contentDelta: string, reasoningDelta: string) => void) => {
+  const parsed = JSON.parse(data) as {
+    choices?: Array<{
+      delta?: {
+        content?: string | null;
+        reasoning?: string | null;
+        reasoning_content?: string | null;
+      };
+    }>;
+  };
+  const delta = parsed.choices?.[0]?.delta;
+  if (!delta) return;
+
+  onDelta(delta.content ?? '', delta.reasoning_content ?? delta.reasoning ?? '');
+};
+
+const findSseBoundary = (buffer: string) => {
+  const lfIndex = buffer.indexOf('\n\n');
+  const crlfIndex = buffer.indexOf('\r\n\r\n');
+
+  if (lfIndex === -1 && crlfIndex === -1) return undefined;
+  if (lfIndex === -1) return { index: crlfIndex, length: 4 };
+  if (crlfIndex === -1) return { index: lfIndex, length: 2 };
+
+  return lfIndex < crlfIndex ? { index: lfIndex, length: 2 } : { index: crlfIndex, length: 4 };
+};
+
+const handleSseChunk = (buffer: string, value: Uint8Array, decoder: TextDecoder, onEvent: (data: string) => void) => {
+  let nextBuffer = buffer + decoder.decode(value, { stream: true });
+  let eventBoundary = findSseBoundary(nextBuffer);
+
+  while (eventBoundary) {
+    const event = nextBuffer.slice(0, eventBoundary.index).trim();
+    nextBuffer = nextBuffer.slice(eventBoundary.index + eventBoundary.length);
+
+    const data = event
+      .split(/\r?\n/)
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.replace(/^data:\s?/, ''))
+      .join('\n')
+      .trim();
+
+    if (data && data !== '[DONE]') {
+      try {
+        onEvent(data);
+      } catch (error) {
+        console.warn('Skipping malformed stream event', error);
+      }
+    }
+
+    eventBoundary = findSseBoundary(nextBuffer);
+  }
+
+  return nextBuffer;
+};
+
+export async function chatCompletion(messages: ChatCompletionMessage[], systemPrompt?: string, options?: LlmRequestOptions) {
   const { providers, activeProviderId } = useAppStore.getState();
   const providerArray = Array.isArray(providers) ? providers : [];
   const provider = providerArray.find(p => p.id === activeProviderId);
@@ -8,7 +90,7 @@ export async function chatCompletion(messages: any[], systemPrompt?: string) {
   if (!provider) throw new Error('No active provider found');
   const apiKey = provider.apiKey;
   if (!apiKey) throw new Error(`API key is missing for ${provider.name}`);
-  const model = provider.activeModel;
+  const model = resolveModel(provider, options?.task);
 
   if (provider.type === 'OPENAI') {
     const baseUrl = provider.baseUrl || 'https://api.openai.com/v1';
@@ -44,7 +126,7 @@ export async function chatCompletion(messages: any[], systemPrompt?: string) {
       parts: [{ text: m.content }]
     }));
 
-    const body: any = { contents: formattedMessages };
+    const body: { contents: typeof formattedMessages; systemInstruction?: { parts: Array<{ text: string }> } } = { contents: formattedMessages };
     if (systemPrompt) {
       body.systemInstruction = { parts: [{ text: systemPrompt }] };
     }
@@ -90,7 +172,12 @@ export async function chatCompletion(messages: any[], systemPrompt?: string) {
   throw new Error('Unsupported provider type');
 }
 
-export async function streamChatCompletion(messages: any[], systemPrompt: string | undefined, onUpdate: (content: string, reasoning: string) => void) {
+export async function streamChatCompletion(
+  messages: ChatCompletionMessage[],
+  systemPrompt: string | undefined,
+  onUpdate: StreamUpdate,
+  options?: LlmRequestOptions,
+) {
   const { providers, activeProviderId } = useAppStore.getState();
   const providerArray = Array.isArray(providers) ? providers : [];
   const provider = providerArray.find(p => p.id === activeProviderId);
@@ -98,7 +185,7 @@ export async function streamChatCompletion(messages: any[], systemPrompt: string
   if (!provider) throw new Error('No active provider found');
   const apiKey = provider.apiKey;
   if (!apiKey) throw new Error(`API key is missing for ${provider.name}`);
-  const model = provider.activeModel;
+  const model = resolveModel(provider, options?.task);
 
   let fullContent = '';
   let fullReasoning = '';
@@ -130,36 +217,30 @@ export async function streamChatCompletion(messages: any[], systemPrompt: string
     const reader = res.body?.getReader();
     const decoder = new TextDecoder("utf-8");
     if (!reader) return;
+
+    let buffer = '';
     
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
-      for (const line of lines) {
-        if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-          try {
-            const parsed = JSON.parse(line.slice(6));
-            const delta = parsed.choices?.[0]?.delta;
-            if (delta?.content) fullContent += delta.content;
-            if (delta?.reasoning_content) fullReasoning += delta.reasoning_content;
-            onUpdate(fullContent, fullReasoning);
-          } catch (e) {
-            // ignore JSON parse error in fragments
-          }
-        }
-      }
+      buffer = handleSseChunk(buffer, value, decoder, (data) => {
+        parseOpenAiCompatibleDelta(data, (contentDelta, reasoningDelta) => {
+          fullContent += contentDelta;
+          fullReasoning += reasoningDelta;
+          if (contentDelta || reasoningDelta) onUpdate(fullContent, fullReasoning);
+        });
+      });
     }
   } else if (provider.type === 'GEMINI') {
     const baseUrl = provider.baseUrl || 'https://generativelanguage.googleapis.com';
-    const endpoint = `${baseUrl.replace(/\/$/, '')}/v1beta/models/${model}:streamGenerateContent?key=${apiKey}`;
+    const endpoint = `${baseUrl.replace(/\/$/, '')}/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
     
     const formattedMessages = messages.map(m => ({
       role: m.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: m.content }]
     }));
 
-    const body: any = { contents: formattedMessages };
+    const body: { contents: typeof formattedMessages; systemInstruction?: { parts: Array<{ text: string }> } } = { contents: formattedMessages };
     if (systemPrompt) body.systemInstruction = { parts: [{ text: systemPrompt }] };
 
     const res = await fetch(endpoint, {
@@ -178,14 +259,19 @@ export async function streamChatCompletion(messages: any[], systemPrompt: string
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      
-      // Gemini SSE format is typically lines of JSON or a JSON array stream
-      // streamGenerateContent with alt=sse returns SSE
-      // Wait, the endpoint above doesn't have alt=sse. So it's returning a chunked JSON array.
-      // Let's use alt=sse
+      buffer = handleSseChunk(buffer, value, decoder, (data) => {
+        const parsed = JSON.parse(data) as { candidates?: Array<{ content?: { parts?: GeminiPart[] } }> };
+        const parts = parsed.candidates?.[0]?.content?.parts;
+        const text = Array.isArray(parts)
+          ? parts.map(part => part.text ?? '').join('')
+          : '';
+
+        if (text) {
+          fullContent += text;
+          onUpdate(fullContent, fullReasoning);
+        }
+      });
     }
-    // We didn't append &alt=sse. Let's fix that!
   } else if (provider.type === 'CLAUDE') {
     const baseUrl = provider.baseUrl || 'https://api.anthropic.com/v1';
     const endpoint = `${baseUrl.replace(/\/$/, '')}/messages`;
@@ -215,25 +301,29 @@ export async function streamChatCompletion(messages: any[], systemPrompt: string
     const reader = res.body?.getReader();
     const decoder = new TextDecoder("utf-8");
     if (!reader) return;
+
+    let buffer = '';
     
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const parsed = JSON.parse(line.slice(6));
-            if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-              fullContent += parsed.delta.text;
-              onUpdate(fullContent, fullReasoning);
-            }
-          } catch (e) {
-            // ignore inner parse errors
-          }
+      buffer = handleSseChunk(buffer, value, decoder, (data) => {
+        const parsed = JSON.parse(data) as {
+          type?: string;
+          delta?: {
+            text?: string;
+            thinking?: string;
+          };
+        };
+
+        if (parsed.type === 'content_block_delta') {
+          const contentDelta = parsed.delta?.text ?? '';
+          const reasoningDelta = parsed.delta?.thinking ?? '';
+          fullContent += contentDelta;
+          fullReasoning += reasoningDelta;
+          if (contentDelta || reasoningDelta) onUpdate(fullContent, fullReasoning);
         }
-      }
+      });
     }
   } else {
     throw new Error('Unsupported provider type');

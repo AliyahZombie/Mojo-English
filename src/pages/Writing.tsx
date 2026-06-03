@@ -1,20 +1,125 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Save, Check, FileText, Plus, X, Wand2, ChevronRight, AlertCircle, Maximize2, Minimize2 } from 'lucide-react';
+import { Save, Check, FileText, Plus, X, Wand2, Maximize2, Minimize2 } from 'lucide-react';
 import { useAppStore, Essay, EssayAnnotation } from '../store/useAppStore';
 import { useChatStore } from '../store/useChatStore';
 import { ChatAssistant } from '../components/ChatAssistant';
 import { cn } from '../lib/utils';
+import { translations } from '../lib/i18n';
 
 interface Segment {
   text: string;
   annotations: EssayAnnotation[];
 }
 
+type AnnotationType = EssayAnnotation['type'];
+
+interface RawEvaluationAnnotation {
+  id?: unknown;
+  originalText?: unknown;
+  text?: unknown;
+  quote?: unknown;
+  suggestion?: unknown;
+  reason?: unknown;
+  type?: unknown;
+}
+
+interface RawEvaluationResult {
+  score?: unknown;
+  summary?: unknown;
+  annotations?: unknown;
+}
+
+const ANNOTATION_TYPES: AnnotationType[] = ['grammar', 'vocabulary', 'style'];
+
+const toAnnotationType = (value: unknown): AnnotationType => {
+  return typeof value === 'string' && ANNOTATION_TYPES.includes(value as AnnotationType) ? value as AnnotationType : 'style';
+};
+
+const normalizeForMatch = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase();
+
+const findNormalizedMatch = (source: string, target: string, fromIndex: number): { startIndex: number; endIndex: number } | null => {
+  const normalizedTarget = normalizeForMatch(target);
+  if (!normalizedTarget) return null;
+
+  const normalizedChars: Array<{ char: string; index: number }> = [];
+  let previousWasSpace = true;
+
+  for (let index = fromIndex; index < source.length; index++) {
+    const originalChar = source[index];
+    const normalizedChar = /\s/.test(originalChar) ? ' ' : originalChar.toLowerCase();
+    if (normalizedChar === ' ') {
+      if (previousWasSpace) continue;
+      previousWasSpace = true;
+    } else {
+      previousWasSpace = false;
+    }
+    normalizedChars.push({ char: normalizedChar, index });
+  }
+
+  const normalizedSource = normalizedChars.map(item => item.char).join('').trimStart();
+  const leadingTrim = normalizedChars.length - normalizedSource.length;
+  const matchIndex = normalizedSource.indexOf(normalizedTarget);
+  if (matchIndex === -1) return null;
+
+  const start = normalizedChars[leadingTrim + matchIndex]?.index;
+  const end = normalizedChars[leadingTrim + matchIndex + normalizedTarget.length - 1]?.index;
+  if (start === undefined || end === undefined) return null;
+
+  return { startIndex: start, endIndex: end + 1 };
+};
+
+const findTextRange = (source: string, target: string, fromIndex: number): { startIndex: number; endIndex: number } | null => {
+  const trimmedTarget = target.trim();
+  if (!trimmedTarget) return null;
+
+  const exactIndex = source.indexOf(trimmedTarget, fromIndex);
+  if (exactIndex !== -1) {
+    return { startIndex: exactIndex, endIndex: exactIndex + trimmedTarget.length };
+  }
+
+  const caseInsensitiveIndex = source.toLowerCase().indexOf(trimmedTarget.toLowerCase(), fromIndex);
+  if (caseInsensitiveIndex !== -1) {
+    return { startIndex: caseInsensitiveIndex, endIndex: caseInsensitiveIndex + trimmedTarget.length };
+  }
+
+  return findNormalizedMatch(source, trimmedTarget, fromIndex);
+};
+
+const extractRawAnnotations = (value: unknown): RawEvaluationAnnotation[] => {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is RawEvaluationAnnotation => typeof item === 'object' && item !== null);
+};
+
+const buildMatchedAnnotations = (text: string, rawAnnotations: unknown): EssayAnnotation[] => {
+  let searchFrom = 0;
+
+  return extractRawAnnotations(rawAnnotations).flatMap((annotation, index) => {
+    const originalText = [annotation.originalText, annotation.text, annotation.quote].find(value => typeof value === 'string' && value.trim());
+    if (typeof originalText !== 'string') return [];
+
+    const range = findTextRange(text, originalText, searchFrom) || findTextRange(text, originalText, 0);
+    if (!range) return [];
+
+    searchFrom = range.endIndex;
+    return [{
+      id: typeof annotation.id === 'string' && annotation.id.trim() ? annotation.id : `a${index + 1}`,
+      startIndex: range.startIndex,
+      endIndex: range.endIndex,
+      suggestion: typeof annotation.suggestion === 'string' && annotation.suggestion.trim() ? annotation.suggestion : 'Revise this text.',
+      reason: typeof annotation.reason === 'string' && annotation.reason.trim() ? annotation.reason : 'This part could be improved.',
+      type: toAnnotationType(annotation.type)
+    }];
+  });
+};
+
+const getErrorMessage = (error: unknown): string => {
+  return error instanceof Error ? error.message : String(error);
+};
+
 const MOCK_EVALUATE = async (text: string): Promise<{ score: number, summary: string, annotations: EssayAnnotation[] }> => {
-  try {
-    const { chatCompletion } = await import('../services/llm');
-    const systemPrompt = `You are an expert English writing tutor. 
+  const { chatCompletion } = await import('../services/llm');
+  const systemPrompt = `You are an expert English writing tutor. 
 Evaluate the following text and provide structured feedback in pure JSON format (without markdown blocks).
 The JSON must have the following schema:
 {
@@ -23,8 +128,7 @@ The JSON must have the following schema:
   "annotations": [
     {
       "id": "<string, unique id>",
-      "startIndex": <number, character start index of the issue in the original text (0-indexed)>,
-      "endIndex": <number, character end index of the issue (exclusive)>,
+      "originalText": "<exact text span from the original essay that should be highlighted>",
       "suggestion": "<string, what should be changed to>",
       "reason": "<string, why it should be changed>",
       "type": "<'style' | 'vocabulary' | 'grammar'>"
@@ -32,55 +136,53 @@ The JSON must have the following schema:
   ]
 }
 
-Ensure absolute precision with startIndex and endIndex by counting characters accurately from the provided text.
+Do not return character indexes. For each annotation, copy the exact original essay text into originalText so the app can match it locally.
 `;
-    
-    // We try asking the LLM to return JSON
-    const response = await chatCompletion([{ role: 'user', content: `Text to evaluate:\n\n${text}` }], systemPrompt);
-    
-    // Extract JSON from potential Markdown blocks or reasoning wraps
-    let cleanedResponse = response;
-    const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
-    if (jsonMatch) {
-      cleanedResponse = jsonMatch[1];
-    } else {
-      // Try to find the first '{' and last '}'
-      const firstBrace = response.indexOf('{');
-      const lastBrace = response.lastIndexOf('}');
-      if (firstBrace !== -1 && lastBrace !== -1) {
-        cleanedResponse = response.substring(firstBrace, lastBrace + 1);
-      }
+
+  const response = await chatCompletion([{ role: 'user', content: `Text to evaluate:\n\n${text}` }], systemPrompt, { task: 'writing-evaluation' });
+
+  // Extract JSON from potential Markdown blocks or reasoning wraps
+  let cleanedResponse = response;
+  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
+  if (jsonMatch) {
+    cleanedResponse = jsonMatch[1];
+  } else {
+    // Try to find the first '{' and last '}'
+    const firstBrace = response.indexOf('{');
+    const lastBrace = response.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1) {
+      cleanedResponse = response.substring(firstBrace, lastBrace + 1);
     }
-    
-    cleanedResponse = cleanedResponse.trim();
-    const result = JSON.parse(cleanedResponse);
-    
-    return {
-      score: result.score || 70,
-      summary: result.summary || "Evaluation complete.",
-      annotations: result.annotations || []
-    };
-  } catch (error) {
-    console.error("Evaluation failed using LLM, falling back to mock", error);
-    // Fallback logic
-    const annotations: EssayAnnotation[] = [];
-    if (text.length > 20) {
-      annotations.push({ id: 'a1', startIndex: 0, endIndex: 10, suggestion: 'Improve the opening phrase', reason: 'A more engaging hook could be used here.', type: 'style' });
-    }
-    return { score: 75, summary: "Mock evaluation (LLM failed).", annotations };
   }
+
+  cleanedResponse = cleanedResponse.trim();
+  let result: RawEvaluationResult;
+  try {
+    result = JSON.parse(cleanedResponse) as RawEvaluationResult;
+  } catch (error) {
+    throw new Error(`Failed to parse writing evaluation JSON: ${getErrorMessage(error)}. Response preview: ${cleanedResponse.slice(0, 500)}`);
+  }
+  const score = typeof result.score === 'number' ? result.score : 70;
+  const summary = typeof result.summary === 'string' && result.summary.trim() ? result.summary : 'Evaluation complete.';
+  const annotations = buildMatchedAnnotations(text, result.annotations);
+
+  return {
+    score,
+    summary,
+    annotations
+  };
 };
 
-const EVALUATION_STEPS = [
-  "Reading your essay...",
-  "Analyzing context and vocabulary...",
-  "Checking grammar rules...",
-  "Evaluating style and coherence...",
-  "Generating suggestions..."
-];
-
 export function Writing() {
-  const { essays, activeEssayId, addEssay, updateEssay, setActiveEssayId, deleteEssay } = useAppStore();
+  const { essays, activeEssayId, addEssay, updateEssay, setActiveEssayId, deleteEssay, language, showAlert } = useAppStore();
+  const t = translations[language];
+  const evaluationSteps = useMemo(() => [
+    t.evaluationStepReading,
+    t.evaluationStepAnalyzing,
+    t.evaluationStepChecking,
+    t.evaluationStepStyle,
+    t.evaluationStepGenerating
+  ], [t]);
   const { addMessage } = useChatStore();
   const activeEssay = essays.find(e => e.id === activeEssayId);
 
@@ -116,7 +218,7 @@ export function Writing() {
   const handleNewEssay = () => {
     const newEssay: Essay = {
       id: Date.now().toString(),
-      title: 'Untitled ' + new Date().toLocaleDateString(),
+      title: `${t.untitled} ${new Date().toLocaleDateString()}`,
       content: '',
       createdAt: Date.now(),
       updatedAt: Date.now()
@@ -146,9 +248,9 @@ export function Writing() {
       
       // Don't overwrite manually set titles
       const firstLine = text.split('\n')[0].substring(0, 30);
-      const titleToSave = activeEssay?.title && !activeEssay.title.startsWith('Untitled') 
+      const titleToSave = activeEssay?.title && !activeEssay.title.startsWith('Untitled') && !activeEssay.title.startsWith(t.untitled)
         ? activeEssay.title 
-        : (firstLine || 'Untitled');
+        : (firstLine || t.untitled);
         
       updateEssay(activeEssayId, { content: text, updatedAt: Date.now(), title: titleToSave });
     }, 500);
@@ -174,7 +276,7 @@ export function Writing() {
     setEvalStep(0);
     
     const interval = setInterval(() => {
-      setEvalStep(prev => (prev + 1) % EVALUATION_STEPS.length);
+      setEvalStep(prev => (prev + 1) % evaluationSteps.length);
     }, 2500);
 
     try {
@@ -202,6 +304,12 @@ export function Writing() {
       });
       addMessage(`essay_${activeEssayId}`, newEvaluationMessage);
       setIsReviewMode(true);
+    } catch (error) {
+      console.error('Writing evaluation failed', error);
+      showAlert({
+        title: 'Evaluation failed',
+        message: getErrorMessage(error),
+      });
     } finally {
       clearInterval(interval);
       setIsEvaluating(false);
@@ -279,7 +387,7 @@ export function Writing() {
           <div className="flex-1 w-full">
             <div className="flex items-center gap-2 mb-1 md:mb-2 text-blue-600 dark:text-blue-400 cursor-pointer" onClick={() => setShowHistory(true)}>
               <FileText size={18} />
-              <span className="font-semibold text-sm">View History</span>
+              <span className="font-semibold text-sm">{t.viewHistory}</span>
             </div>
             <input 
               value={activeEssay?.title || ''}
@@ -289,10 +397,10 @@ export function Writing() {
                 }
               }}
               className="w-full bg-transparent border-none outline-none focus:ring-2 focus:ring-blue-500/50 rounded px-1 -ml-1 text-2xl md:text-3xl font-bold text-slate-800 dark:text-slate-200 transition-colors"
-              placeholder="Essay Title"
+              placeholder={t.essayTitle}
             />
             <p className="text-slate-500 dark:text-slate-400 text-sm md:text-base transition-colors mt-1">
-              {isReviewMode ? 'Reviewing evaluation.' : 'Express your thoughts freely.'}
+              {isReviewMode ? t.evaluatingReview : t.writingPrompt}
             </p>
           </div>
           <div className="flex items-center gap-2 md:gap-3">
@@ -302,21 +410,21 @@ export function Writing() {
                className="flex items-center gap-1.5 px-3 py-1.5 md:px-4 md:py-2 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 rounded-xl font-medium text-xs md:text-sm border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-50 shrink-0"
             >
                <Save size={14} />
-               <span className="hidden md:inline">Save</span>
+                <span className="hidden md:inline">{t.save}</span>
             </button>
             <div className="flex items-center gap-3 bg-white dark:bg-slate-900 px-3 py-1.5 md:px-4 md:py-2 rounded-xl shadow-sm border border-slate-100 dark:border-slate-800 self-end md:self-auto min-w-[fit-content] transition-colors">
               {isSaving ? (
                 <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 font-medium text-xs md:text-sm">
                   <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                  Saving...
+                  {t.saving}
                 </div>
               ) : lastSaved ? (
                 <div className="flex items-center gap-2 text-emerald-500 dark:text-emerald-400 font-medium text-xs md:text-sm">
                   <Check size={14} />
-                  Saved {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {t.saved} {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </div>
               ) : (
-                <div className="text-slate-400 text-xs md:text-sm">Ready</div>
+                <div className="text-slate-400 text-xs md:text-sm">{t.ready}</div>
               )}
             </div>
           </div>
@@ -328,7 +436,7 @@ export function Writing() {
               {activeEssay.evaluationScore}
             </div>
             <div>
-              <h3 className="font-bold text-indigo-900 dark:text-indigo-300">Evaluation Result</h3>
+              <h3 className="font-bold text-indigo-900 dark:text-indigo-300">{t.evaluationResult}</h3>
               <p className="text-indigo-700 dark:text-indigo-400 text-sm mt-1">{activeEssay.evaluationSummary}</p>
             </div>
           </div>
@@ -351,12 +459,12 @@ export function Writing() {
             </div>
             <div className="flex items-center gap-3">
               <span className="text-[10px] text-slate-500 dark:text-slate-600 font-mono">
-                {isReviewMode ? "mode: review" : "autosave: active"}
+                {isReviewMode ? t.modeReview : t.autosaveActive}
               </span>
               <button 
                 onClick={() => setIsFullscreen(!isFullscreen)}
                 className="text-slate-400 hover:text-slate-300 dark:text-slate-500 dark:hover:text-slate-300 transition-colors pr-2 cursor-pointer z-10"
-                title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+                title={isFullscreen ? t.exitFullscreen : t.fullscreen}
               >
                 {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
               </button>
@@ -402,7 +510,7 @@ export function Writing() {
                         transition={{ duration: 0.4 }}
                         className="absolute inset-0 flex items-center justify-center font-medium text-lg bg-clip-text text-transparent bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 dark:from-blue-400 dark:via-indigo-400 dark:to-purple-400"
                       >
-                        {EVALUATION_STEPS[evalStep]}
+                        {evaluationSteps[evalStep]}
                       </motion.div>
                     </AnimatePresence>
                   </div>
@@ -435,7 +543,7 @@ export function Writing() {
                 onChange={(e) => setText(e.target.value)}
                 className="flex-1 w-full h-full bg-transparent border-none outline-none resize-none p-4 md:p-6 font-mono text-sm leading-relaxed text-slate-300 dark:text-slate-400 hide-scrollbar transition-colors"
                 spellCheck={false}
-                placeholder="Start writing..."
+                placeholder={t.startWriting}
               />
             ) : (
               <div className="flex-1 overflow-y-auto p-4 md:p-6 font-sans text-base leading-relaxed text-slate-800 dark:text-slate-300 whitespace-pre-wrap">
@@ -458,8 +566,6 @@ export function Writing() {
                     
                     let stops = '';
                     const segmentSize = 8;
-                    const totalSize = uniqueTypes.length * segmentSize;
-                    
                     uniqueTypes.forEach((t, index) => {
                       const color = colorValues[t as keyof typeof colorValues] || 'rgba(168, 85, 247, 0.25)';
                       const start = index * segmentSize;
@@ -474,7 +580,7 @@ export function Writing() {
                         style={{
                           backgroundImage: `repeating-linear-gradient(-45deg, ${stops})`
                         }}
-                        title="Multiple suggestions"
+                        title={t.multipleSuggestions}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleSegmentClick(e, seg.annotations);
@@ -517,7 +623,7 @@ export function Writing() {
               onClick={handleReturnToEdit}
               className="px-4 py-2.5 md:px-6 md:py-3 rounded-xl md:rounded-2xl font-bold text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2"
             >
-              Resume Editing
+              {t.resumeEditing}
             </button>
           ) : (
             <button 
@@ -528,12 +634,12 @@ export function Writing() {
               {isEvaluating ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  <span>Evaluating...</span>
+                  <span>{t.evaluating}</span>
                 </>
               ) : (
                 <>
                   <Wand2 size={16} />
-                  <span>Evaluate</span>
+                  <span>{t.evaluate}</span>
                 </>
               )}
             </button>
@@ -543,7 +649,7 @@ export function Writing() {
         {/* All Suggestions List */}
         {isReviewMode && activeEssay?.annotations && activeEssay.annotations.length > 0 && (
           <div className="mt-8 border-t border-slate-200 dark:border-slate-800 pt-6">
-            <h3 className="font-bold text-lg mb-4 text-slate-800 dark:text-slate-200">All Suggestions ({activeEssay.annotations.length})</h3>
+            <h3 className="font-bold text-lg mb-4 text-slate-800 dark:text-slate-200">{t.allSuggestions} ({activeEssay.annotations.length})</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {activeEssay.annotations.map(ann => (
                 <div key={ann.id} className="p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 flex flex-col h-full text-sm">
@@ -585,9 +691,9 @@ export function Writing() {
           >
             <ChatAssistant 
               contextId={`essay_${activeEssayId}`} 
-              title="Writing Assistant"
-              description="Ask questions about your writing or evaluations"
-              systemContext={`The user is currently writing/reviewing an essay titled "${activeEssay?.title || 'Untitled'}". The current text is:\n\n${text}\n\nEvaluations/Annotations (if any): ${JSON.stringify(activeEssay?.annotations)}`}
+              title={t.writingAssistant}
+              description={t.askWritingEvaluations}
+              systemContext={`The user is currently writing/reviewing an essay titled "${activeEssay?.title || t.untitled}". The current text is:\n\n${text}\n\nEvaluations/Annotations (if any): ${JSON.stringify(activeEssay?.annotations)}`}
               onClose={toggleAssistant}
               className="h-full"
             />
@@ -615,9 +721,9 @@ export function Writing() {
             >
                <ChatAssistant 
                   contextId={`essay_${activeEssayId}`} 
-                  title="Writing Assistant"
-                  description="Ask questions about your writing"
-                  systemContext={`The user is currently writing/reviewing an essay titled "${activeEssay?.title || 'Untitled'}". The current text is:\n\n${text}\n\nEvaluations/Annotations (if any): ${JSON.stringify(activeEssay?.annotations)}`}
+                  title={t.writingAssistant}
+                  description={t.askWriting}
+                  systemContext={`The user is currently writing/reviewing an essay titled "${activeEssay?.title || t.untitled}". The current text is:\n\n${text}\n\nEvaluations/Annotations (if any): ${JSON.stringify(activeEssay?.annotations)}`}
                   onClose={toggleAssistant}
                   className="rounded-none border-none shadow-none h-full"
                   isEmbedded={true}
@@ -646,9 +752,9 @@ export function Writing() {
               className="fixed right-0 top-0 bottom-0 w-80 bg-white dark:bg-slate-900 shadow-2xl z-50 border-l border-slate-100 dark:border-slate-800 flex flex-col"
             >
               <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-900/50">
-                <h2 className="font-bold text-lg dark:text-white">Writing History</h2>
+                <h2 className="font-bold text-lg dark:text-white">{t.writingHistory}</h2>
                 <div className="flex gap-2">
-                  <button onClick={handleNewEssay} className="p-2 bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors" title="New Essay">
+                  <button onClick={handleNewEssay} className="p-2 bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors" title={t.newEssay}>
                     <Plus size={18} />
                   </button>
                   <button onClick={() => setShowHistory(false)} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">
@@ -672,7 +778,7 @@ export function Writing() {
                     )}
                   >
                     <div className="flex justify-between items-start mb-1">
-                      <h3 className="font-medium text-slate-800 dark:text-slate-200 truncate pr-2">{essay.title || 'Untitled'}</h3>
+                      <h3 className="font-medium text-slate-800 dark:text-slate-200 truncate pr-2">{essay.title || t.untitled}</h3>
                       {confirmDeleteId === essay.id ? (
                         <div className="flex gap-2 items-center">
                           <button 
@@ -683,7 +789,7 @@ export function Writing() {
                             }}
                             className="bg-red-500 text-white text-xs px-2 py-0.5 rounded hover:bg-red-600 w-12"
                           >
-                            Sure
+                            {t.sure}
                           </button>
                           <button 
                             onClick={(e) => {
@@ -692,7 +798,7 @@ export function Writing() {
                             }}
                             className="text-slate-400 hover:text-slate-600 text-xs px-1"
                           >
-                            Cancel
+                            {t.cancel}
                           </button>
                         </div>
                       ) : (
@@ -708,20 +814,20 @@ export function Writing() {
                       )}
                     </div>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mb-2 truncate">
-                      {essay.content || 'No content yet'}
+                      {essay.content || t.noContentYet}
                     </p>
                     <div className="flex justify-between items-center text-[10px] text-slate-400 dark:text-slate-500">
                       <span>{new Date(essay.updatedAt).toLocaleDateString()}</span>
                       {essay.evaluationScore !== undefined && (
                         <span className="font-medium text-indigo-500 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 px-1.5 py-0.5 rounded">
-                          Score: {essay.evaluationScore}
+                          {t.score}: {essay.evaluationScore}
                         </span>
                       )}
                     </div>
                   </div>
                 ))}
                 {essays.length === 0 && (
-                  <p className="text-center text-sm text-slate-500 dark:text-slate-400 mt-10">No history found</p>
+                  <p className="text-center text-sm text-slate-500 dark:text-slate-400 mt-10">{t.noHistoryFound}</p>
                 )}
               </div>
             </motion.div>
@@ -736,7 +842,7 @@ export function Writing() {
           style={{ top: activeTooltip.y, left: Math.min(activeTooltip.x, window.innerWidth - 300) }}
         >
           <div className="flex justify-between items-center mb-3 pb-2 border-b border-slate-100 dark:border-slate-700">
-            <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200">Suggestions ({activeTooltip.annotations.length})</h4>
+            <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200">{t.suggestions} ({activeTooltip.annotations.length})</h4>
             <button onClick={() => setActiveTooltip(null)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
               <X size={14} />
             </button>

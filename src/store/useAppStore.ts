@@ -6,6 +6,8 @@ import type { NewsShortAnswerEvaluation } from '../services/newsTypes';
 const defaultNewsdataApiKey = import.meta.env.VITE_NEWSDATA_API_KEY || '';
 const defaultTavilyApiKey = import.meta.env.VITE_TAVILY_API_KEY || '';
 
+export const DEFAULT_STORY_PROMPT = 'Write an engaging, coherent English story for language learners. Keep the story concise, natural, and easy to read.';
+
 export interface Provider {
   id: string;
   name: string;
@@ -23,7 +25,8 @@ export type LlmTask =
   | 'dictionary-lookup'
   | 'writing-evaluation'
   | 'news-optimization'
-  | 'quiz-evaluation';
+  | 'quiz-evaluation'
+  | 'story-generation';
 
 export const LLM_TASK_LABELS: Record<LlmTask, string> = {
   'assistant-chat': '助手聊天',
@@ -32,6 +35,7 @@ export const LLM_TASK_LABELS: Record<LlmTask, string> = {
   'writing-evaluation': '作文评估',
   'news-optimization': '新闻界面优化 / 语言过滤',
   'quiz-evaluation': 'Quiz 出题与简答评估',
+  'story-generation': 'Story 故事生成',
 };
 
 export interface Deck {
@@ -76,6 +80,15 @@ export interface Essay {
   messages?: ChatMessage[];
 }
 
+export interface Story {
+  id: string;
+  title: string;
+  content: string;
+  words: string[];
+  createdAt: number;
+  deckId: string | null;
+}
+
 export interface AlertData {
   title?: string;
   message: string;
@@ -109,6 +122,7 @@ interface AppState {
   webhookTemplate: string;
   activeProviderId: string;
   providers: Provider[];
+  storyPrompt: string;
   preferences: string[];
   theme: 'light' | 'dark';
   language: Language;
@@ -116,6 +130,7 @@ interface AppState {
   decks: Deck[];
   activeDeckId: string | null;
   essays: Essay[];
+  stories: Story[];
   activeEssayId: string | null;
   newsQuizStates: NewsQuizStateByArticleId;
   
@@ -129,6 +144,7 @@ interface AppState {
   setTavilyApiKey: (apiKey: string) => void;
   setNotificationConfig: (token: string, url: string, headers: string, template: string) => void;
   replaceProviders: (providers: Provider[], activeProviderId: string) => void;
+  setStoryPrompt: (prompt: string) => void;
   setActiveProviderId: (id: string) => void;
   addProvider: (provider: Provider) => void;
   updateProvider: (id: string, provider: Provider) => void;
@@ -141,12 +157,16 @@ interface AppState {
   clearAlert: () => void;
   setLanguage: (lang: Language) => void;
   addDeck: (deck: Deck) => void;
+  updateDeck: (deckId: string, updates: Partial<Pick<Deck, 'name' | 'words'>>) => void;
+  addWordToDeck: (deckId: string, word: string) => void;
   setActiveDeckId: (deckId: string | null) => void;
   deleteDeck: (deckId: string) => void;
   addEssay: (essay: Essay) => void;
   updateEssay: (id: string, essay: Partial<Essay>) => void;
   deleteEssay: (id: string) => void;
   setActiveEssayId: (id: string | null) => void;
+  addStory: (story: Story) => void;
+  deleteStory: (id: string) => void;
   setNewsQuizArticleState: (articleId: string, updates: Partial<NewsQuizArticleState>) => void;
 }
 
@@ -184,6 +204,7 @@ export const useAppStore = create<AppState>()(
           activeModel: 'gemini-1.5-flash',
         }
       ],
+      storyPrompt: DEFAULT_STORY_PROMPT,
       preferences: [],
       dailyGoal: 5,
       theme: 'light',
@@ -191,6 +212,7 @@ export const useAppStore = create<AppState>()(
       decks: [],
       activeDeckId: null,
       essays: [],
+      stories: [],
       activeEssayId: null,
       newsQuizStates: {},
       isAssistantOpen: false,
@@ -203,6 +225,7 @@ export const useAppStore = create<AppState>()(
       setTavilyApiKey: (apiKey) => set({ tavilyApiKey: apiKey.trim() || defaultTavilyApiKey }),
       setNotificationConfig: (token, url, headers, template) => set({ upstashQstashToken: token, webhookUrl: url, webhookHeaders: headers, webhookTemplate: template }),
       replaceProviders: (providers, activeProviderId) => set({ providers, activeProviderId }),
+      setStoryPrompt: (prompt) => set({ storyPrompt: prompt }),
       setActiveProviderId: (id) => set({ activeProviderId: id }),
       addProvider: (provider) => set((state) => ({ providers: [...(Array.isArray(state.providers) ? state.providers : []), provider] })),
       updateProvider: (id, provider) => set((state) => ({
@@ -223,6 +246,21 @@ export const useAppStore = create<AppState>()(
       clearAlert: () => set({ alertData: null }),
       setLanguage: (lang) => set({ language: lang }),
       addDeck: (deck) => set((state) => ({ decks: [...state.decks, deck] })),
+      updateDeck: (id, updates) => set((state) => ({
+        decks: state.decks.map(deck => deck.id === id ? { ...deck, ...updates } : deck)
+      })),
+      addWordToDeck: (id, word) => set((state) => {
+        const normalizedWord = word.trim().toLowerCase();
+        if (!normalizedWord) return {};
+
+        return {
+          decks: state.decks.map(deck => {
+            if (deck.id !== id) return deck;
+            if (deck.words.some(entry => entry.toLowerCase() === normalizedWord)) return deck;
+            return { ...deck, words: [...deck.words, normalizedWord] };
+          })
+        };
+      }),
       setActiveDeckId: (id) => set({ activeDeckId: id }),
       deleteDeck: (id) => set((state) => ({ 
         decks: state.decks.filter(d => d.id !== id), 
@@ -237,6 +275,8 @@ export const useAppStore = create<AppState>()(
         activeEssayId: state.activeEssayId === id ? null : state.activeEssayId
       })),
       setActiveEssayId: (id) => set({ activeEssayId: id }),
+      addStory: (story) => set((state) => ({ stories: [story, ...state.stories] })),
+      deleteStory: (id) => set((state) => ({ stories: state.stories.filter(story => story.id !== id) })),
       setNewsQuizArticleState: (articleId, updates) => set((state) => ({
         newsQuizStates: {
           ...state.newsQuizStates,
@@ -261,6 +301,7 @@ export const useAppStore = create<AppState>()(
         webhookTemplate: state.webhookTemplate,
         activeProviderId: state.activeProviderId,
         providers: state.providers,
+        storyPrompt: state.storyPrompt,
         preferences: state.preferences,
         theme: state.theme,
         language: state.language,
@@ -268,6 +309,7 @@ export const useAppStore = create<AppState>()(
         decks: state.decks,
         activeDeckId: state.activeDeckId,
         essays: state.essays,
+        stories: state.stories,
         activeEssayId: state.activeEssayId,
         newsQuizStates: state.newsQuizStates
       })

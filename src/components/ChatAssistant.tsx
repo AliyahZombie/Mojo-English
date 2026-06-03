@@ -1,12 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { Send, User as UserIcon, Wand2, X, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useChatStore } from '../store/useChatStore';
 import { useAppStore } from '../store/useAppStore';
-import { translations } from '../lib/i18n';
+import { translations, type Language } from '../lib/i18n';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+
+const getErrorMessage = (error: unknown, language: Language) => error instanceof Error ? error.message : translations[language].chatFetchError;
 
 interface ChatAssistantProps {
   contextId: string; // Used to isolate conversations
@@ -21,11 +23,10 @@ interface ChatAssistantProps {
 export function ChatAssistant({ 
   contextId, 
   title, 
-  description = "Ask questions or discuss the content..", 
+  description,
   onClose,
   className,
-  systemContext,
-  isEmbedded = false
+  systemContext
 }: ChatAssistantProps) {
   const { language } = useAppStore();
   const t = translations[language];
@@ -81,13 +82,13 @@ export function ChatAssistant({
       
       sessionHistory.push({ role: 'user', content: userText });
       
-      await streamChatCompletion(sessionHistory, systemContext || "You are a helpful assistant.", (partialContent, partialReasoning) => {
+      await streamChatCompletion(sessionHistory, systemContext || t.helpfulAssistantPrompt, (partialContent, partialReasoning) => {
         updateMessage(contextId, assistantMessageId, { content: partialContent, reasoning: partialReasoning });
-      });
+      }, { task: 'assistant-chat' });
       
-    } catch (error: any) {
+    } catch (error) {
       console.error(error);
-      updateMessage(contextId, assistantMessageId, { content: `Error: ${error.message || 'Failed to fetch response'}` });
+      updateMessage(contextId, assistantMessageId, { content: `Error: ${getErrorMessage(error, language)}` });
     } finally {
       setIsTyping(false);
     }
@@ -95,7 +96,7 @@ export function ChatAssistant({
 
   const clearChat = () => {
     useAppStore.getState().showAlert({
-      message: "Clear this conversation context?",
+      message: t.clearConversationConfirm,
       isConfirm: true,
       onConfirm: () => {
         clearSession(contextId);
@@ -111,14 +112,14 @@ export function ChatAssistant({
             <Wand2 size={16} className="text-blue-500" />
             {title || t.chatAssistant}
           </h3>
-          <p className="text-[10px] md:text-xs text-slate-500 dark:text-slate-400 mt-0.5">{description}</p>
+          <p className="text-[10px] md:text-xs text-slate-500 dark:text-slate-400 mt-0.5">{description || t.chatDefaultDescription}</p>
         </div>
         <div className="flex items-center gap-1">
           {messages.length > 0 && (
             <button 
               onClick={clearChat}
               className="p-2 text-slate-400 hover:text-red-500 dark:hover:text-red-400 transition-colors rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
-              title="Clear context"
+              title={t.clearContext}
             >
               <Trash2 size={16} />
             </button>
@@ -137,7 +138,7 @@ export function ChatAssistant({
       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
         {messages.length === 0 && (
           <div className="text-center text-slate-400 dark:text-slate-500 text-sm mt-10">
-            No messages yet. Ask a question to start.
+            {t.noMessagesYet}
           </div>
         )}
         
@@ -159,7 +160,7 @@ export function ChatAssistant({
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
                       <Wand2 size={14} className="text-blue-500" />
-                      Analysis Report
+                      {t.analysisReport}
                     </span>
                     <span className={cn(
                       "px-2 py-0.5 rounded-full text-xs font-bold",
@@ -190,14 +191,18 @@ export function ChatAssistant({
                     <details className="text-slate-500 text-xs border border-slate-200 dark:border-slate-700/50 rounded-lg bg-slate-100/50 dark:bg-slate-900/50 [&_summary::-webkit-details-marker]:hidden">
                       <summary className="cursor-pointer font-medium p-2 select-none hover:bg-slate-200/50 dark:hover:bg-slate-800/50 transition-colors flex items-center gap-2 rounded-lg">
                         <Wand2 size={12} className="text-slate-400" />
-                        Thought Process
+                        {t.thoughtProcess}
                       </summary>
                       <div className="p-3 pt-0 whitespace-pre-wrap font-mono leading-relaxed opacity-80 border-t border-slate-200 dark:border-slate-700/50 mt-1">
                         {msg.reasoning}
                       </div>
                     </details>
                   )}
-                  <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown>
+                  {msg.content ? (
+                    <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown>
+                  ) : msg.role === 'assistant' && msg.reasoning ? (
+                    <div className="text-xs text-slate-400 italic">{t.thinking}</div>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -234,7 +239,7 @@ export function ChatAssistant({
                 handleSend();
               }
             }}
-            placeholder={t.typeMessage || "Ask something..."}
+            placeholder={t.typeMessage}
             className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl md:rounded-3xl pl-4 pr-12 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none min-h-[44px] md:min-h-[50px] max-h-[120px] shadow-sm text-slate-800 dark:text-slate-200 placeholder:text-slate-400"
             rows={1}
             style={{

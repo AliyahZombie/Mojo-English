@@ -1,12 +1,14 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Flame, Clock, Glasses, Target, Layers, Newspaper, PenTool } from 'lucide-react';
+import { Flame, Clock, Glasses, Target, Newspaper, PenTool, Users } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppStore } from '../store/useAppStore';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { translations } from '../lib/i18n';
 import { ChatAssistant } from '../components/ChatAssistant';
+
+const hasSupabaseAnalyticsConfig = Boolean(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
 
 function StatCard({ 
   title, value, subtitle, icon: Icon, colorClass 
@@ -32,10 +34,10 @@ function StatCard({
   );
 }
 
-import { useFsrsStore } from '../store/useFsrsStore';
+import { getLocalDateString, useFsrsStore } from '../store/useFsrsStore';
 
 export function Home() {
-  const { dailyGoal, language, isAssistantOpen, toggleAssistant } = useAppStore();
+  const { dailyGoal, language, isAssistantOpen, toggleAssistant, analyticsConsent, analyticsOnlineUsers, setAnalyticsConsent, showAlert } = useAppStore();
   const { getDailyStudiedCount, dailyStats } = useFsrsStore();
   const t = translations[language];
   const studiedToday = getDailyStudiedCount();
@@ -44,6 +46,21 @@ export function Home() {
     const quotes = t.quotes;
     return quotes[Math.floor(Math.random() * quotes.length)];
   }, [t.quotes]);
+
+  useEffect(() => {
+    if (analyticsConsent !== null) return;
+
+    showAlert({
+      title: t.analyticsConsentTitle,
+      message: t.analyticsConsentDesc,
+      isConfirm: true,
+      variant: 'analytics-consent',
+      confirmText: t.analyticsConsentAccept,
+      cancelText: t.analyticsConsentDecline,
+      onConfirm: () => setAnalyticsConsent(true),
+      onCancel: () => setAnalyticsConsent(false),
+    });
+  }, [analyticsConsent, setAnalyticsConsent, showAlert, t.analyticsConsentAccept, t.analyticsConsentDecline, t.analyticsConsentDesc, t.analyticsConsentTitle]);
 
   const streakCount = useMemo(() => {
     let streak = 0;
@@ -54,7 +71,7 @@ export function Home() {
     for (let i = 0; i < 365; i++) {
         const d = new Date();
         d.setDate(d.getDate() - i);
-        const dateStr = d.toISOString().split('T')[0];
+        const dateStr = getLocalDateString(d);
         if (dailyStats[dateStr]?.studiedCount > 0) {
             streak++;
         } else if (i > 0) {
@@ -76,7 +93,7 @@ export function Home() {
       const d = new Date();
       d.setDate(d.getDate() - i);
       const dayIndex = d.getDay() === 0 ? 6 : d.getDay() - 1; // 0=Sun->6, 1=Mon->0
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = getLocalDateString(d);
       const count = dailyStats[dateStr]?.studiedCount || 0;
       
       chartData.push({
@@ -101,6 +118,14 @@ export function Home() {
         <header className="mb-6 shrink-0">
         <h1 className="text-3xl font-bold mb-1 tracking-tight text-slate-800 dark:text-slate-200 transition-colors">{t.yourProgress}</h1>
         <p className="text-slate-500 dark:text-slate-400 text-sm transition-colors">{randomQuote}</p>
+        {analyticsConsent === true && hasSupabaseAnalyticsConfig && (
+          <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-blue-100/80 dark:border-blue-900/50 bg-blue-50/70 dark:bg-blue-950/30 px-3 py-1.5 text-sm font-medium text-slate-500 dark:text-slate-400 shadow-sm shadow-blue-500/5 transition-colors">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white dark:bg-slate-900">
+              <Users size={13} className="text-blue-500 dark:text-blue-400" />
+            </span>
+            {t.onlineLearners.replace('{count}', analyticsOnlineUsers.toLocaleString())}
+          </div>
+        )}
       </header>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-6">
@@ -201,8 +226,8 @@ export function Home() {
         >
           <ChatAssistant 
             contextId="home_dashboard"
-            title="Dashboard Assistant"
-            description="Ask me about your progress"
+            title={t.dashboardAssistant}
+            description={t.dashboardAssistantDesc}
             className="h-full shadow-sm"
             onClose={toggleAssistant}
           />
@@ -230,8 +255,8 @@ export function Home() {
           >
              <ChatAssistant 
                 contextId="home_dashboard"
-                title="Dashboard Assistant"
-                description="Ask me about your progress"
+                title={t.dashboardAssistant}
+                description={t.dashboardAssistantDesc}
                 onClose={toggleAssistant}
                 className="rounded-none border-none shadow-none h-full"
                 isEmbedded={true}

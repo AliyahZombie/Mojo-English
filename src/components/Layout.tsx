@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Layers, Newspaper, PenTool, Settings, Moon, Sun, BookA, ChevronLeft, Languages, Wand2 } from 'lucide-react';
+import React from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { Home, Layers, Newspaper, PenTool, Settings, BookA, ChevronLeft, Languages, Wand2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppStore } from '../store/useAppStore';
 import { Logo } from './Logo';
@@ -60,8 +60,8 @@ export function Navigation() {
         </nav>
         
         <div className="mt-auto p-4 bg-gradient-to-tr from-blue-500 to-blue-400 dark:from-blue-600 dark:to-blue-500 rounded-3xl text-white shadow-md shadow-blue-500/20 dark:shadow-none">
-          <p className="text-xs opacity-80 uppercase tracking-widest mb-1">Provider Status</p>
-          <p className="font-bold truncate text-sm" title={activeProviderName}>{activeProviderName} Connected</p>
+          <p className="text-xs opacity-80 uppercase tracking-widest mb-1">{t.providerStatus}</p>
+          <p className="font-bold truncate text-sm" title={activeProviderName}>{activeProviderName} {t.connected}</p>
           <div className="mt-3 bg-white/20 h-1.5 rounded-full overflow-hidden">
             <div className="bg-white w-3/4 h-full rounded-full"></div>
           </div>
@@ -72,9 +72,8 @@ export function Navigation() {
 }
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const { hasConfigured, theme, language, setLanguage, isAssistantOpen, toggleAssistant } = useAppStore();
+  const { hasConfigured, language, setLanguage, isAssistantOpen, toggleAssistant } = useAppStore();
   const location = useLocation();
-  const navigate = useNavigate();
   const t = translations[language];
 
   const getGreeting = () => {
@@ -87,6 +86,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const isHome = location.pathname === '/';
   const showHeader = hasConfigured;
+  const locationState = location.state as { from?: string } | null;
+  const searchParams = new URLSearchParams(location.search);
+  const dictionaryReturnPath = location.pathname === '/dictionary'
+    ? locationState?.from || searchParams.get('from')
+    : null;
+  const mobileBackPath = dictionaryReturnPath?.startsWith('/') ? dictionaryReturnPath : '/';
 
   return (
     <div className="flex w-full h-[100dvh] bg-gradient-to-br from-[#F0F7FF] via-[#FFFFFF] to-[#E6F0FF] dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 font-sans text-slate-800 dark:text-slate-200 overflow-hidden relative">
@@ -97,7 +102,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <div className="flex items-center gap-2">
               {!isHome && (
                 <Link 
-                  to="/" 
+                  to={mobileBackPath}
                   className="md:hidden p-2 -ml-2 mr-1 rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                 >
                   <ChevronLeft size={24} />
@@ -122,7 +127,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <Link to="/dictionary" className="p-2 rounded-xl text-slate-400 dark:text-slate-500 hover:bg-white/50 dark:hover:bg-slate-800/50 transition-colors" title={t.dictionary}>
                 <BookA size={20} />
               </Link>
-              <button onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')} className="p-2 rounded-xl text-slate-400 dark:text-slate-500 hover:bg-white/50 dark:hover:bg-slate-800/50 transition-colors" title="Toggle Language">
+              <button onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')} className="p-2 rounded-xl text-slate-400 dark:text-slate-500 hover:bg-white/50 dark:hover:bg-slate-800/50 transition-colors" title={t.toggleLanguage}>
                 <Languages size={20} />
               </button>
               <button 
@@ -131,7 +136,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   "p-2 rounded-xl transition-colors", 
                   isAssistantOpen ? "bg-blue-100/50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-slate-500 hover:bg-white/50 dark:hover:bg-slate-800/50"
                 )} 
-                title="AI Assistant"
+                title={t.aiAssistantTitle}
               >
                 <Wand2 size={20} />
               </button>

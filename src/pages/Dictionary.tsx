@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronLeft, Search, Loader2, Sparkles } from 'lucide-react';
+import { ChevronLeft, Search, Loader2, Sparkles, BookOpen } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { WordCard, WordDetail } from '../components/WordCard';
@@ -8,9 +8,11 @@ import { searchDictionary } from '../services/dictionaryApi';
 import { ChatAssistant } from '../components/ChatAssistant';
 import { useAppStore } from '../store/useAppStore';
 import { translations } from '../lib/i18n';
+import { getDecksForWord } from '../lib/decks';
+import { DeckPickerModal } from '../components/DeckPickerModal';
 
 export function Dictionary() {
-  const { isAssistantOpen, toggleAssistant, language } = useAppStore();
+  const { isAssistantOpen, toggleAssistant, language, decks, addWordToDeck, showAlert } = useAppStore();
   const t = translations[language];
   const navigate = useNavigate();
   const location = useLocation();
@@ -24,6 +26,7 @@ export function Dictionary() {
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<WordDetail | null>(null);
   const [error, setError] = useState('');
+  const [isDeckPickerOpen, setIsDeckPickerOpen] = useState(false);
 
   useEffect(() => {
     if (initialQuery) {
@@ -31,14 +34,14 @@ export function Dictionary() {
     }
   }, []);
 
-  const performSearch = async (searchTerm: string, forceAi: boolean = false) => {
+  const performSearch = async (searchTerm: string, forceAi: boolean = false, preferLocal: boolean = false) => {
     if (!searchTerm.trim()) return;
 
     setIsLoading(true);
     setError('');
     
     try {
-      const res = await searchDictionary(searchTerm, { forceAi });
+      const res = await searchDictionary(searchTerm, { forceAi, preferLocal });
       if (res) {
         setResult(res);
         setSearchWord(res.word);
@@ -53,6 +56,21 @@ export function Dictionary() {
       setIsLoading(false);
     }
   };
+
+  const handleAddToDeck = (deckId: string) => {
+    if (!result) return;
+    addWordToDeck(deckId, result.word);
+    showAlert(t.addedToDeck);
+    setIsDeckPickerOpen(false);
+  };
+
+  const handlePreferLocal = async () => {
+    const term = searchWord || result?.word || query;
+    if (!term) return;
+    await performSearch(term, false, true);
+  };
+
+  const membershipDecks = result ? getDecksForWord(decks, result.word) : [];
 
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -120,15 +138,27 @@ export function Dictionary() {
           </div>
         ) : result ? (
           <div className="w-full max-w-4xl pb-10 flex flex-col items-center">
-            <WordCard word={result} isShowAnswer={true} />
-            <button 
-              onClick={() => performSearch(searchWord, true)}
-              disabled={isLoading}
-              className="mt-6 px-6 py-2.5 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium text-sm transition-colors flex items-center gap-2"
-            >
-              <Sparkles size={16} className="text-blue-500" />
-              {t.regenerate}
-            </button>
+            <WordCard word={result} isShowAnswer={true} membershipDecks={membershipDecks} onAddToDeck={() => setIsDeckPickerOpen(true)} />
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              {result.id.startsWith('ai-') && (
+                <button 
+                  onClick={handlePreferLocal}
+                  disabled={isLoading}
+                  className="px-6 py-2.5 rounded-full bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 font-medium text-sm transition-colors flex items-center gap-2"
+                >
+                  <BookOpen size={16} />
+                  {t.viewLocalDictionaryResult}
+                </button>
+              )}
+              <button 
+                onClick={() => performSearch(searchWord, true)}
+                disabled={isLoading}
+                className="px-6 py-2.5 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium text-sm transition-colors flex items-center gap-2"
+              >
+                <Sparkles size={16} className="text-blue-500" />
+                {t.regenerate}
+              </button>
+            </div>
           </div>
         ) : !isLoading && searchWord === '' ? (
           <div className="flex flex-col items-center justify-center h-64 opacity-50 select-none text-center">
@@ -192,6 +222,13 @@ export function Dictionary() {
           </>
         )}
       </AnimatePresence>
+      <DeckPickerModal
+        isOpen={isDeckPickerOpen}
+        word={result?.word || ''}
+        decks={decks}
+        onClose={() => setIsDeckPickerOpen(false)}
+        onSelect={handleAddToDeck}
+      />
     </div>
   );
 }

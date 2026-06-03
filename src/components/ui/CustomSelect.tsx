@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDown, Check } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { useAppStore } from '../../store/useAppStore';
+import { translations } from '../../lib/i18n';
 
 interface Option {
   value: string;
@@ -15,7 +17,9 @@ interface CustomSelectProps {
   placeholder?: string;
 }
 
-export function CustomSelect({ value, options, onChange, className, placeholder = "Select an option" }: CustomSelectProps) {
+export function CustomSelect({ value, options, onChange, className, placeholder }: CustomSelectProps) {
+  const { language } = useAppStore();
+  const t = translations[language];
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -42,7 +46,7 @@ export function CustomSelect({ value, options, onChange, className, placeholder 
         className="w-full flex items-center justify-between bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 outline-none hover:border-blue-300 dark:hover:border-blue-700 transition-colors text-slate-800 dark:text-slate-200 text-left"
       >
         <span className={cn("truncate", !selectedOption && "text-slate-400 dark:text-slate-500")}>
-          {selectedOption ? selectedOption.label : placeholder}
+          {selectedOption ? selectedOption.label : (placeholder || t.selectOption)}
         </span>
         <ChevronDown size={16} className={cn("text-slate-400 transition-transform", isOpen && "rotate-180")} />
       </button>
@@ -67,7 +71,7 @@ export function CustomSelect({ value, options, onChange, className, placeholder 
             </button>
           ))}
           {options.length === 0 && (
-            <div className="px-4 py-3 text-sm text-slate-500 text-center">No options available</div>
+            <div className="px-4 py-3 text-sm text-slate-500 text-center">{t.noOptionsAvailable}</div>
           )}
         </div>
       )}
