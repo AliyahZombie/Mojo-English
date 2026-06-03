@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Search, Loader2, Sparkles } from 'lucide-react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { ChevronLeft, Search, Loader2, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { WordCard, WordDetail } from '../components/WordCard';
@@ -12,8 +12,12 @@ import { translations } from '../lib/i18n';
 export function Dictionary() {
   const { isAssistantOpen, toggleAssistant, language } = useAppStore();
   const t = translations[language];
+  const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQuery = searchParams.get('q') || '';
+  const navigationState = location.state as { from?: string; returnLabel?: string } | null;
+  const returnTo = navigationState?.from || searchParams.get('from');
   
   const [query, setQuery] = useState(initialQuery);
   const [searchWord, setSearchWord] = useState('');
@@ -40,11 +44,11 @@ export function Dictionary() {
         setSearchWord(res.word);
       } else {
         setResult(null);
-        setError(`No results found for "${searchTerm}"`);
+        setError(`${t.noResultsFor} "${searchTerm}"`);
       }
     } catch (err) {
       setResult(null);
-      setError('An error occurred while searching.');
+      setError(t.searchError);
     } finally {
       setIsLoading(false);
     }
@@ -53,9 +57,22 @@ export function Dictionary() {
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (query.trim()) {
-      setSearchParams({ q: query.trim() });
+      const nextParams: Record<string, string> = { q: query.trim() };
+      if (returnTo) {
+        nextParams.from = returnTo;
+      }
+      setSearchParams(nextParams);
       await performSearch(query);
     }
+  };
+
+  const handleReturn = () => {
+    if (returnTo?.startsWith('/')) {
+      navigate(returnTo);
+      return;
+    }
+
+    navigate(-1);
   };
 
   return (
@@ -65,7 +82,17 @@ export function Dictionary() {
         isAssistantOpen ? "max-w-2xl" : "max-w-4xl"
       )}>
         <header className="w-full mb-6 shrink-0">
-        <h1 className="text-2xl md:text-3xl font-bold mb-4 text-slate-800 dark:text-slate-200 transition-colors text-center">Dictionary</h1>
+        {returnTo && (
+          <button
+            type="button"
+            onClick={handleReturn}
+            className="mb-4 inline-flex items-center gap-1 text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 text-sm font-bold tracking-wide transition-colors uppercase"
+          >
+            <ChevronLeft size={18} className="-ml-1" />
+            {navigationState?.returnLabel || t.backToNews}
+          </button>
+        )}
+        <h1 className="text-2xl md:text-3xl font-bold mb-4 text-slate-800 dark:text-slate-200 transition-colors text-center">{t.dictionary}</h1>
         
         <form onSubmit={handleSearch} className="relative max-w-2xl mx-auto w-full group">
           <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
@@ -74,7 +101,7 @@ export function Dictionary() {
           <input
             type="text"
             className="w-full bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-800 focus:border-blue-500 dark:focus:border-blue-500 rounded-2xl py-3 pl-12 pr-12 text-lg text-slate-800 dark:text-slate-200 outline-none transition-all shadow-sm"
-            placeholder={t.searchPlaceholder || "Search for a word..."}
+            placeholder={t.searchPlaceholder}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -89,7 +116,7 @@ export function Dictionary() {
       <div className="w-full flex-1 overflow-y-auto hide-scrollbar flex flex-col items-center">
         {error ? (
           <div className="flex flex-col items-center justify-center h-48 bg-slate-50 dark:bg-slate-900/50 w-full rounded-3xl border border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400">
-            <p>{t.noResult || error}</p>
+            <p>{error}</p>
           </div>
         ) : result ? (
           <div className="w-full max-w-4xl pb-10 flex flex-col items-center">
@@ -100,14 +127,14 @@ export function Dictionary() {
               className="mt-6 px-6 py-2.5 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium text-sm transition-colors flex items-center gap-2"
             >
               <Sparkles size={16} className="text-blue-500" />
-              {t.regenerate || 'Regenerate via AI'}
+              {t.regenerate}
             </button>
           </div>
         ) : !isLoading && searchWord === '' ? (
           <div className="flex flex-col items-center justify-center h-64 opacity-50 select-none text-center">
             <Search size={48} className="text-slate-300 dark:text-slate-700 mb-4" />
             <p className="text-slate-500 dark:text-slate-400 max-w-sm">
-              {language === 'zh' ? '输入单词查看翻译和频率。' : 'Enter a word to see its translation and frequency.'}
+              {t.dictionaryEmptyHint}
             </p>
           </div>
         ) : null}
@@ -124,8 +151,8 @@ export function Dictionary() {
           >
             <ChatAssistant 
               contextId={`dict_${result.word}`}
-              title="Dictionary Assistant"
-              description={`Discuss the word "${result.word}"`}
+              title={t.dictionaryAssistant}
+              description={`${t.discussWord} "${result.word}"`}
               systemContext={`The user is looking at the dictionary entry for "${result.word}". Details: ${JSON.stringify(result)}`}
               onClose={toggleAssistant}
               className="h-full"
@@ -154,8 +181,8 @@ export function Dictionary() {
             >
                <ChatAssistant 
                   contextId={`dict_${result.word}`}
-                  title="Dictionary Assistant"
-                  description={`Discuss the word "${result.word}"`}
+                  title={t.dictionaryAssistant}
+                  description={`${t.discussWord} "${result.word}"`}
                   systemContext={`The user is looking at the dictionary entry for "${result.word}". Details: ${JSON.stringify(result)}`}
                   onClose={toggleAssistant}
                   className="rounded-none border-none shadow-none h-full"

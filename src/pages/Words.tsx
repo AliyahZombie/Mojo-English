@@ -2,20 +2,22 @@ import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { WordCard, WordDetail } from '../components/WordCard';
 import { useAppStore } from '../store/useAppStore';
-import { useFsrsStore } from '../store/useFsrsStore';
+import { getFsrsCardKey, useFsrsStore } from '../store/useFsrsStore';
 import { searchDictionary } from '../services/dictionaryApi';
-import { Loader2, BookA, Trophy, RefreshCw, List, X, CalendarClock } from 'lucide-react';
+import { Loader2, BookA, Trophy, RefreshCw, X, CalendarClock, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { ChatAssistant } from '../components/ChatAssistant';
 import { cn } from '../lib/utils';
 import { Rating, State } from 'ts-fsrs';
+import { translations } from '../lib/i18n';
 
 export function Words() {
-  const { decks, activeDeckId, dailyGoal } = useAppStore();
+  const { decks, activeDeckId, dailyGoal, language, isAssistantOpen, toggleAssistant } = useAppStore();
+  const t = translations[language];
   const activeDeck = decks.find(d => d.id === activeDeckId);
   const wordsList = activeDeck?.words || [];
 
-  const { processReview, activeQueueDeckId, initQueue, getNextCard, getDailyStudiedCount } = useFsrsStore();
+  const { processReview, markWordMastered, activeQueueDeckId, initQueue, getNextCard, getNextDueTime, getDailyStudiedCount } = useFsrsStore();
   const dailyStudied = getDailyStudiedCount();
   const sessionLimit = Math.max(1, dailyGoal);
 
@@ -24,7 +26,7 @@ export function Words() {
   // Derive state from fsrs store
   const isSessionComplete = dailyStudied >= (sessionLimit + extraGoal);
 
-  const [tick, setTick] = useState(0);
+  const [, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick(t => t + 1), 30000); // 30s poll
     return () => clearInterval(timer);
@@ -33,18 +35,18 @@ export function Words() {
   useEffect(() => {
     if (wordsList.length > 0 && activeDeckId) {
       if (activeQueueDeckId !== activeDeckId) {
-        initQueue(activeDeckId);
+        initQueue(activeDeckId, wordsList);
       }
     }
   }, [activeDeckId, wordsList.length, initQueue, activeQueueDeckId]);
 
-  const currentWord = !isSessionComplete && activeQueueDeckId === activeDeckId ? getNextCard(activeDeckId, wordsList) : null;
+  const currentWord = activeDeckId && !isSessionComplete && activeQueueDeckId === activeDeckId ? getNextCard(activeDeckId, wordsList) : null;
   const isQueueEmpty = !currentWord;
 
   useEffect(() => {
     if (isQueueEmpty || isSessionComplete) {
-      const getNextDueTime = useFsrsStore.getState().getNextDueTime;
-      const nextDueTime = getNextDueTime(wordsList);
+      if (!activeDeckId) return;
+      const nextDueTime = getNextDueTime(activeDeckId, wordsList);
       
       import('../services/notificationService').then(({ NotificationService }) => {
         if (nextDueTime && nextDueTime > Date.now()) {
@@ -58,14 +60,12 @@ export function Words() {
         }
       });
     }
-  }, [isQueueEmpty, isSessionComplete, wordsList]);
+  }, [activeDeckId, getNextDueTime, isQueueEmpty, isSessionComplete, wordsList]);
 
   const [isShowAnswer, setIsShowAnswer] = useState(false);
   const [currentWordDetail, setCurrentWordDetail] = useState<WordDetail | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   
-  const { isAssistantOpen, toggleAssistant } = useAppStore();
-
   const [isShowList, setIsShowList] = useState(false);
 
   useEffect(() => {
@@ -88,8 +88,16 @@ export function Words() {
     if (ratingRaw === 'good') rating = Rating.Good;
     if (ratingRaw === 'easy') rating = Rating.Easy;
 
-    if (currentWord) {
-      processReview(currentWord, rating);
+    if (currentWord && activeDeckId) {
+      processReview(activeDeckId, currentWord, rating);
+    }
+
+    setIsShowAnswer(false);
+  };
+
+  const handleMarkMastered = () => {
+    if (currentWord && activeDeckId) {
+      markWordMastered(activeDeckId, currentWord);
     }
 
     setIsShowAnswer(false);
@@ -97,58 +105,58 @@ export function Words() {
 
   const handleContinueSession = () => {
     setExtraGoal(e => Math.max(e + (dailyGoal || 20), dailyStudied - sessionLimit + (dailyGoal || 20)));
-    if (!getNextCard(activeDeckId!, wordsList)) {
-       useAppStore.getState().showAlert("No more words due right now!");
+    if (activeDeckId && !getNextCard(activeDeckId, wordsList)) {
+       useAppStore.getState().showAlert(t.noMoreWordsDue);
     }
   };
 
   const intervals = useMemo(() => {
-    if (!currentWord) return { again: '< 1m', hard: '5m', good: '10m', easy: '4d' };
-    return useFsrsStore.getState().getNextIntervals(currentWord);
-  }, [currentWord]);
+    if (!currentWord || !activeDeckId) return { again: '< 1m', hard: '5m', good: '10m', easy: '4d' };
+    return useFsrsStore.getState().getNextIntervals(activeDeckId, currentWord);
+  }, [activeDeckId, currentWord]);
 
   // Only calculate active words for the study queue when list is shown
   const cards = useFsrsStore(state => state.cards);
   const activeWords = useMemo(() => {
-     if (!isShowList) return [];
+     if (!isShowList || !activeDeckId) return [];
      const list = wordsList.filter(w => {
-        const card = cards[w];
+        const card = cards[getFsrsCardKey(activeDeckId, w)] || cards[w];
         return card && card.state !== State.New;
-     });
-     list.sort((a, b) => {
-        const cardA = cards[a];
-        const cardB = cards[b];
+      });
+      list.sort((a, b) => {
+        const cardA = cards[getFsrsCardKey(activeDeckId, a)] || cards[a];
+        const cardB = cards[getFsrsCardKey(activeDeckId, b)] || cards[b];
         const dueA = cardA.due ? new Date(cardA.due).getTime() : 0;
         const dueB = cardB.due ? new Date(cardB.due).getTime() : 0;
         return dueA - dueB;
      });
      return list;
-  }, [isShowList, wordsList, cards]);
+  }, [activeDeckId, isShowList, wordsList, cards]);
 
   function getDueTimeStr(card?: { due?: Date }) {
      if (!card || !card.due) return "";
      const now = new Date().getTime();
      const due = new Date(card.due).getTime();
      const diffMs = due - now;
-     if (diffMs <= 0) return "Due now";
-     
-     const diffMins = Math.floor(diffMs / 60000);
-     if (diffMins < 60) return `Due in ${diffMins}m`;
-     const diffHours = Math.floor(diffMins / 60);
-     if (diffHours < 24) return `Due in ${diffHours}h ${diffMins % 60}m`;
-     return `Due in ${Math.floor(diffHours / 24)}d`;
-  }
+      if (diffMs <= 0) return t.dueNow;
+      
+      const diffMins = Math.floor(diffMs / 60000);
+      if (diffMins < 60) return `${t.dueIn} ${diffMins}m`;
+      const diffHours = Math.floor(diffMins / 60);
+      if (diffHours < 24) return `${t.dueIn} ${diffHours}h ${diffMins % 60}m`;
+      return `${t.dueIn} ${Math.floor(diffHours / 24)}d`;
+   }
 
   if (!activeDeck) {
     return (
       <div className="max-w-4xl mx-auto w-full flex-1 flex flex-col items-center justify-center p-8">
         <BookA size={64} className="text-slate-300 dark:text-slate-700 mb-6" />
-        <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">No Active Deck</h2>
+        <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">{t.noActiveDeck}</h2>
         <p className="text-slate-500 dark:text-slate-400 mb-8 text-center max-w-md">
-          Please upload and select a vocabulary deck in the Setup page to start reviewing.
+          {t.noActiveDeckDesc}
         </p>
         <Link to="/setup" className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-xl transition-colors">
-          Go to Setup
+          {t.goToSetup}
         </Link>
       </div>
     );
@@ -158,23 +166,23 @@ export function Words() {
     return (
       <div className="max-w-4xl mx-auto w-full flex-1 flex flex-col items-center justify-center p-8">
         <Trophy size={64} className="text-yellow-400 mb-6" />
-        <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">Review Complete!</h2>
+        <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">{t.reviewComplete}</h2>
         <p className="text-slate-500 dark:text-slate-400 mb-8 text-center">
-          You have reviewed {dailyStudied} words today.
+          {t.reviewedWordsToday} {dailyStudied} {t.words}.
           <br/>
-          Goal progress: {dailyStudied} / {dailyGoal + extraGoal}
+          {t.goalProgress}: {dailyStudied} / {dailyGoal + extraGoal}
         </p>
         <button 
           onClick={handleContinueSession}
           className="flex lg:hidden bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-xl transition-colors items-center gap-2 m-2"
         >
-          <RefreshCw size={20} /> Continue Reviewing
+          <RefreshCw size={20} /> {t.continueReviewing}
         </button>
         <button 
           onClick={handleContinueSession}
           className="hidden lg:flex bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-xl transition-colors items-center gap-2 m-2"
         >
-          <RefreshCw size={20} /> Continue Reviewing
+          <RefreshCw size={20} /> {t.continueReviewing}
         </button>
       </div>
     );
@@ -184,13 +192,13 @@ export function Words() {
     return (
       <div className="max-w-4xl mx-auto w-full flex-1 flex flex-col items-center justify-center p-8">
         <BookA size={64} className="text-blue-400 mb-6" />
-        <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">You're All Caught Up!</h2>
+        <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">{t.allCaughtUp}</h2>
         <p className="text-slate-500 dark:text-slate-400 mb-8 text-center">
-          No more words are due for review right now. 
+          {t.noWordsDue}
           <br/>
-          You've reviewed {dailyStudied} words today. Great job!
+          {t.reviewedTodayGreat} {dailyStudied} {t.words}. {t.greatJob}
           <br/>
-          Please come back later when more words are due.
+          {t.comeBackLater}
         </p>
       </div>
     );
@@ -204,23 +212,23 @@ export function Words() {
       )}>
         <header className="w-full mb-6 relative shrink-0">
           <div className="absolute right-0 top-0 hidden md:block">
-            <button onClick={() => setIsShowList(true)} className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-xl transition-colors" title="Study Queue">
+            <button onClick={() => setIsShowList(true)} className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-xl transition-colors" title={t.studyQueue}>
               <CalendarClock size={22} />
             </button>
           </div>
           <div className="text-center px-12 sm:px-16 w-full max-w-full mx-auto flex flex-col items-center relative">
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl md:text-3xl font-bold mb-1 md:mb-2 text-slate-800 dark:text-slate-200 transition-colors">Daily Review</h1>
-              <button onClick={() => setIsShowList(true)} className="md:hidden p-1.5 text-slate-400 hover:text-blue-500 rounded-lg" title="Study Queue">
+               <h1 className="text-2xl md:text-3xl font-bold mb-1 md:mb-2 text-slate-800 dark:text-slate-200 transition-colors">{t.dailyReview}</h1>
+              <button onClick={() => setIsShowList(true)} className="md:hidden p-1.5 text-slate-400 hover:text-blue-500 rounded-lg" title={t.studyQueue}>
                 <CalendarClock size={18} />
               </button>
             </div>
             <div className="text-slate-500 dark:text-slate-400 text-sm transition-colors flex flex-col sm:flex-row items-center justify-center max-w-full gap-2">
               <span className="shrink-0 font-medium bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-full text-slate-600 dark:text-slate-300">
-                Goal: {dailyStudied} / {dailyGoal + extraGoal}
+                {t.goal}: {dailyStudied} / {dailyGoal + extraGoal}
               </span>
               <div className="flex items-center">
-                <span className="shrink-0">Studying&nbsp;</span>
+                 <span className="shrink-0">{t.studying}&nbsp;</span>
                 <div className="relative overflow-hidden group mask-edge flex min-w-[50px] max-w-[120px] sm:max-w-[200px]">
                   <span className="font-bold truncate opacity-0 md:opacity-100 md:group-hover:opacity-0 transition-opacity w-full block text-left">
                     {activeDeck.name}
@@ -242,7 +250,7 @@ export function Words() {
           {isLoading || !currentWordDetail ? (
             <div className="flex flex-col items-center text-slate-400">
               <Loader2 size={32} className="animate-spin mb-4" />
-              <p>Loading word...</p>
+              <p>{t.loadingWord}</p>
             </div>
           ) : (
             <WordCard word={currentWordDetail} isShowAnswer={isShowAnswer} />
@@ -255,30 +263,34 @@ export function Words() {
               onClick={() => setIsShowAnswer(true)} 
               className="w-full max-w-sm py-4 rounded-xl md:rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-lg shadow-lg shadow-blue-500/30 transition-all hover:scale-[1.02] active:scale-95"
             >
-              Show Answer
+              {t.showAnswer}
             </button>
           </div>
         ) : isShowAnswer && !isLoading && currentWordDetail ? (
           <motion.div 
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            className="flex w-full justify-center gap-2 md:gap-4 mt-6 md:mt-10 shrink-0 px-2 md:px-0 max-w-2xl mx-auto"
+            className="grid w-full grid-cols-5 gap-2 md:gap-4 mt-6 md:mt-10 shrink-0 px-2 md:px-0 max-w-3xl mx-auto"
           >
-            <button onClick={() => handleFSRS('again')} className="flex-1 flex flex-col items-center justify-center py-2 md:py-3 rounded-xl md:rounded-2xl bg-white dark:bg-slate-900 hover:bg-rose-50 dark:hover:bg-rose-900/20 group transition-all active:scale-95 border-b-4 border-rose-200 dark:border-rose-900/50 hover:border-rose-500 dark:hover:border-rose-500 shadow-sm">
-              <span className="font-bold text-sm md:text-lg text-rose-500 dark:text-rose-400">Again</span>
+            <button onClick={() => handleFSRS('again')} className="flex flex-col items-center justify-center py-2 md:py-3 rounded-xl md:rounded-2xl bg-white dark:bg-slate-900 hover:bg-rose-50 dark:hover:bg-rose-900/20 group transition-all active:scale-95 border-b-4 border-rose-200 dark:border-rose-900/50 hover:border-rose-500 dark:hover:border-rose-500 shadow-sm">
+              <span className="font-bold text-sm md:text-lg text-rose-500 dark:text-rose-400">{t.again}</span>
               <span className="text-[10px] md:text-xs font-medium text-slate-400 dark:text-slate-500 group-hover:text-rose-400 transition-colors">&lt; {intervals.again}</span>
             </button>
-            <button onClick={() => handleFSRS('hard')} className="flex-1 flex flex-col items-center justify-center py-2 md:py-3 rounded-xl md:rounded-2xl bg-white dark:bg-slate-900 hover:bg-orange-50 dark:hover:bg-orange-900/20 group transition-all active:scale-95 border-b-4 border-orange-200 dark:border-orange-900/50 hover:border-orange-500 dark:hover:border-orange-500 shadow-sm">
-              <span className="font-bold text-sm md:text-lg text-orange-500 dark:text-orange-400">Hard</span>
+            <button onClick={() => handleFSRS('hard')} className="flex flex-col items-center justify-center py-2 md:py-3 rounded-xl md:rounded-2xl bg-white dark:bg-slate-900 hover:bg-orange-50 dark:hover:bg-orange-900/20 group transition-all active:scale-95 border-b-4 border-orange-200 dark:border-orange-900/50 hover:border-orange-500 dark:hover:border-orange-500 shadow-sm">
+              <span className="font-bold text-sm md:text-lg text-orange-500 dark:text-orange-400">{t.hard}</span>
               <span className="text-[10px] md:text-xs font-medium text-slate-400 dark:text-slate-500 group-hover:text-orange-400 transition-colors">{intervals.hard}</span>
             </button>
-            <button onClick={() => handleFSRS('good')} className="flex-1 flex flex-col items-center justify-center py-2 md:py-3 rounded-xl md:rounded-2xl bg-white dark:bg-slate-900 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 group transition-all active:scale-95 border-b-4 border-emerald-200 dark:border-emerald-900/50 hover:border-emerald-500 dark:hover:border-emerald-500 shadow-sm">
-              <span className="font-bold text-sm md:text-lg text-emerald-500 dark:text-emerald-400">Good</span>
+            <button onClick={() => handleFSRS('good')} className="flex flex-col items-center justify-center py-2 md:py-3 rounded-xl md:rounded-2xl bg-white dark:bg-slate-900 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 group transition-all active:scale-95 border-b-4 border-emerald-200 dark:border-emerald-900/50 hover:border-emerald-500 dark:hover:border-emerald-500 shadow-sm">
+              <span className="font-bold text-sm md:text-lg text-emerald-500 dark:text-emerald-400">{t.good}</span>
               <span className="text-[10px] md:text-xs font-medium text-slate-400 dark:text-slate-500 group-hover:text-emerald-400 transition-colors">{intervals.good}</span>
             </button>
-            <button onClick={() => handleFSRS('easy')} className="flex-1 flex flex-col items-center justify-center py-2 md:py-3 rounded-xl md:rounded-2xl bg-white dark:bg-slate-900 hover:bg-blue-50 dark:hover:bg-blue-900/20 group transition-all active:scale-95 border-b-4 border-blue-200 dark:border-blue-900/50 hover:border-blue-500 dark:hover:border-blue-500 shadow-sm">
-              <span className="font-bold text-sm md:text-lg text-blue-500 dark:text-blue-400">Easy</span>
+            <button onClick={() => handleFSRS('easy')} className="flex flex-col items-center justify-center py-2 md:py-3 rounded-xl md:rounded-2xl bg-white dark:bg-slate-900 hover:bg-blue-50 dark:hover:bg-blue-900/20 group transition-all active:scale-95 border-b-4 border-blue-200 dark:border-blue-900/50 hover:border-blue-500 dark:hover:border-blue-500 shadow-sm">
+              <span className="font-bold text-sm md:text-lg text-blue-500 dark:text-blue-400">{t.easy}</span>
               <span className="text-[10px] md:text-xs font-medium text-slate-400 dark:text-slate-500 group-hover:text-blue-400 transition-colors">{intervals.easy}</span>
+            </button>
+            <button onClick={handleMarkMastered} className="flex flex-col items-center justify-center py-2 md:py-3 rounded-xl md:rounded-2xl bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 group transition-all active:scale-95 border-b-4 border-slate-200 dark:border-slate-700 hover:border-slate-500 dark:hover:border-slate-400 shadow-sm" title={t.markKnownTitle}>
+              <Trash2 size={18} className="mb-0.5 text-slate-500 dark:text-slate-400 group-hover:text-slate-700 dark:group-hover:text-slate-200" />
+              <span className="font-bold text-xs md:text-base text-slate-500 dark:text-slate-400 group-hover:text-slate-700 dark:group-hover:text-slate-200">{t.known}</span>
             </button>
           </motion.div>
         ) : null}
@@ -294,8 +306,8 @@ export function Words() {
           >
             <ChatAssistant 
               contextId={`word_${currentWordDetail.word}`}
-              title="Word Assistant"
-              description={`Discuss the word "${currentWordDetail.word}"`}
+              title={t.wordAssistant}
+              description={`${t.discussWord} "${currentWordDetail.word}"`}
               systemContext={`The user is currently studying the word "${currentWordDetail.word}". Details: ${JSON.stringify(currentWordDetail)}`}
               onClose={toggleAssistant}
               className="h-full"
@@ -324,8 +336,8 @@ export function Words() {
             >
               <ChatAssistant 
                 contextId={`word_${currentWordDetail.word}`}
-                title="Word Assistant"
-                description={`Discuss the word "${currentWordDetail.word}"`}
+                title={t.wordAssistant}
+                description={`${t.discussWord} "${currentWordDetail.word}"`}
                 systemContext={`The user is currently studying the word "${currentWordDetail.word}". Details: ${JSON.stringify(currentWordDetail)}`}
                 onClose={toggleAssistant}
                 className="rounded-none border-none shadow-none h-full"
@@ -355,7 +367,7 @@ export function Words() {
             >
               <div className="p-4 md:p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-900/50 rounded-t-3xl text-slate-800 dark:text-slate-200">
                 <h2 className="font-bold text-xl md:text-2xl flex items-center gap-2">
-                  <CalendarClock className="text-blue-500" /> Study Queue
+                  <CalendarClock className="text-blue-500" /> {t.studyQueue}
                 </h2>
                 <button onClick={() => setIsShowList(false)} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-full transition-colors">
                   <X size={20} />
@@ -364,21 +376,21 @@ export function Words() {
               <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-2">
                 {activeWords.length === 0 ? (
                   <div className="py-12 text-center text-slate-500 dark:text-slate-400 font-medium">
-                    No active words in learning or review.
+                    {t.noActiveWords}
                   </div>
                 ) : (
                   activeWords.map(w => {
-                    const card = cards[w];
-                    let statusStr = "New";
+                    const card = cards[getFsrsCardKey(activeDeckId, w)] || cards[w];
+                    let statusStr = t.queueStatusNew;
                     let statusClass = "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400";
                     let dueStr = getDueTimeStr(card);
                     
                     if (card) {
                       if (card.state === State.Learning || card.state === State.Relearning) {
-                        statusStr = "Learning";
+                         statusStr = t.queueStatusLearning;
                         statusClass = "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400";
                       } else if (card.state === State.Review) {
-                        statusStr = "Review";
+                         statusStr = t.queueStatusReview;
                         statusClass = "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400";
                       }
                     }
@@ -409,4 +421,3 @@ export function Words() {
     </div>
   );
 }
-

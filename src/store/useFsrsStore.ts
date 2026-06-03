@@ -5,30 +5,43 @@ import { Card, FSRS, createEmptyCard, Rating, State, ReviewLog } from 'ts-fsrs';
 export interface DailyStats {
   date: string; // YYYY-MM-DD
   studiedCount: number;
+  studiedKeys?: string[];
+  legacyStudiedCount?: number;
 }
 
 interface FsrsState {
   cards: Record<string, Card>;
+  masteredWords: Record<string, boolean>;
   logs: ReviewLog[];
   dailyStats: Record<string, DailyStats>;
 
   // Dynamic queue state
   activeQueueDeckId: string | null;
 
-  getCard: (word: string) => Card;
-  processReview: (word: string, rating: Rating, now?: Date) => { card: Card; log: ReviewLog } | null;
-  getDueStats: (words: string[]) => { dueCount: number; newCount: number; learningCount: number; reviewCount: number };
-  getNextDueTime: (words: string[]) => number | null;
+  getCard: (deckId: string, word: string) => Card;
+  getStoredCard: (deckId: string, word: string) => Card | undefined;
+  isWordMastered: (deckId: string, word: string) => boolean;
+  processReview: (deckId: string, word: string, rating: Rating, now?: Date) => { card: Card; log: ReviewLog } | null;
+  markWordMastered: (deckId: string, word: string) => void;
+  getDueStats: (deckId: string, words: string[]) => { dueCount: number; newCount: number; learningCount: number; reviewCount: number };
+  getNextDueTime: (deckId: string, words: string[]) => number | null;
   getNextCard: (deckId: string, words: string[]) => string | null;
   getDailyStudiedCount: () => number;
-  getNextIntervals: (word: string) => { again: string; hard: string; good: string; easy: string };
+  getNextIntervals: (deckId: string, word: string) => { again: string; hard: string; good: string; easy: string };
 
   // Session management
-  initQueue: (deckId: string) => void;
+  initQueue: (deckId: string, words?: string[]) => void;
   continueSession: () => void;
 }
 
-const getTodayString = () => new Date().toISOString().split('T')[0];
+export const getFsrsCardKey = (deckId: string, word: string) => `${deckId}::${word}`;
+
+export const getLocalDateString = (date = new Date()) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 const fsrs = new FSRS({
   enable_fuzz: false // matches the python code
@@ -45,38 +58,80 @@ function formatInterval(due: Date, now: Date): string {
   return `${(diffMonths / 12).toFixed(1)}y`;
 }
 
+function rehydrateCard(card: Card): Card {
+  return {
+    ...card,
+    due: card.due ? new Date(card.due) : new Date(),
+    last_review: card.last_review ? new Date(card.last_review) : undefined
+  };
+}
+
+function recordDailyStudy(stats: Record<string, DailyStats>, studyKey: string) {
+  const today = getLocalDateString();
+  const currentStats = stats[today] || { date: today, studiedCount: 0 };
+  const existingKeys = currentStats.studiedKeys || [];
+  const studiedKeys = existingKeys.includes(studyKey) ? existingKeys : [...existingKeys, studyKey];
+  const legacyBaseCount = currentStats.legacyStudiedCount ?? (currentStats.studiedKeys ? 0 : currentStats.studiedCount);
+
+  return {
+    ...stats,
+    [today]: {
+      ...currentStats,
+      legacyStudiedCount: legacyBaseCount,
+      studiedKeys,
+      studiedCount: legacyBaseCount + studiedKeys.length
+    }
+  };
+}
+
 export const useFsrsStore = create<FsrsState>()(
   persist(
     (set, get) => ({
       cards: {},
+      masteredWords: {},
       logs: [],
       dailyStats: {},
-      
+       
       activeQueueDeckId: null,
 
-      initQueue: (deckId: string) => {
-        set({ activeQueueDeckId: deckId });
+      initQueue: (deckId: string, words: string[] = []) => {
+        set((state) => {
+          const migratedCards = { ...state.cards };
+          for (const word of words) {
+            const scopedKey = getFsrsCardKey(deckId, word);
+            if (!migratedCards[scopedKey] && migratedCards[word]) {
+              migratedCards[scopedKey] = migratedCards[word];
+            }
+          }
+
+          return { activeQueueDeckId: deckId, cards: migratedCards };
+        });
       },
 
       continueSession: () => {
         // No-op for dynamic
       },
 
-      getCard: (word: string) => {
+      getStoredCard: (deckId: string, word: string) => {
         const state = get();
-        if (state.cards[word]) {
-          const c = state.cards[word];
-          return {
-            ...c,
-            due: c.due ? new Date(c.due) : new Date(),
-            last_review: c.last_review ? new Date(c.last_review) : undefined
-          };
-        }
+        const scopedKey = getFsrsCardKey(deckId, word);
+        const storedCard = state.cards[scopedKey] || state.cards[word];
+        return storedCard ? rehydrateCard(storedCard) : undefined;
+      },
+
+      getCard: (deckId: string, word: string) => {
+        const storedCard = get().getStoredCard(deckId, word);
+        if (storedCard) return storedCard;
         return createEmptyCard();
       },
 
-      processReview: (word: string, rating: Rating, now = new Date()) => {
-        const card = get().getCard(word);
+      isWordMastered: (deckId: string, word: string) => {
+        return !!get().masteredWords[getFsrsCardKey(deckId, word)];
+      },
+
+      processReview: (deckId: string, word: string, rating: Rating, now = new Date()) => {
+        const card = get().getCard(deckId, word);
+        const scopedKey = getFsrsCardKey(deckId, word);
         try {
           const scheduling_cards = fsrs.repeat(card, now);
           const result = scheduling_cards[rating];
@@ -84,21 +139,12 @@ export const useFsrsStore = create<FsrsState>()(
 
           const newCard = result.card;
           const newLog = result.log;
-          
+           
           set((state) => {
-            const today = getTodayString();
-            const currentStats = state.dailyStats[today] || { date: today, studiedCount: 0 };
-            
             return {
-              cards: { ...state.cards, [word]: newCard },
+              cards: { ...state.cards, [scopedKey]: newCard },
               logs: [...state.logs, newLog],
-              dailyStats: {
-                ...state.dailyStats,
-                [today]: {
-                  ...currentStats,
-                  studiedCount: currentStats.studiedCount + 1
-                }
-              }
+              dailyStats: recordDailyStudy(state.dailyStats, scopedKey)
             };
           });
 
@@ -109,24 +155,34 @@ export const useFsrsStore = create<FsrsState>()(
         }
       },
 
-      getDueStats: (words: string[]) => {
+      markWordMastered: (deckId: string, word: string) => {
+        const scopedKey = getFsrsCardKey(deckId, word);
+        set((state) => ({
+          masteredWords: { ...state.masteredWords, [scopedKey]: true },
+          dailyStats: recordDailyStudy(state.dailyStats, scopedKey)
+        }));
+      },
+
+      getDueStats: (deckId: string, words: string[]) => {
         const state = get();
         const now = new Date();
-        const learnAheadTime = new Date(now.getTime() + 20 * 60 * 1000); // 20 mins
         let dueCount = 0;
         let newCount = 0;
         let learningCount = 0;
         let reviewCount = 0;
 
         for (const word of words) {
-          const card = state.cards[word];
+          const scopedKey = getFsrsCardKey(deckId, word);
+          if (state.masteredWords[scopedKey]) continue;
+
+          const card = state.cards[scopedKey] || state.cards[word];
           if (!card) {
             newCount++;
           } else {
             if (card.state === State.New) {
               newCount++;
             } else if (card.state === State.Learning || card.state === State.Relearning) {
-              if (card.due && new Date(card.due) <= learnAheadTime) {
+              if (card.due && new Date(card.due) <= now) {
                 learningCount++;
                 dueCount++;
               }
@@ -142,13 +198,16 @@ export const useFsrsStore = create<FsrsState>()(
         return { dueCount, newCount, learningCount, reviewCount };
       },
 
-      getNextDueTime: (words: string[]) => {
+      getNextDueTime: (deckId: string, words: string[]) => {
         const state = get();
         const now = Date.now();
         let minDue: number | null = null;
         
         for (const w of words) {
-          const card = state.cards[w];
+          const scopedKey = getFsrsCardKey(deckId, w);
+          if (state.masteredWords[scopedKey]) continue;
+
+          const card = state.cards[scopedKey] || state.cards[w];
           if (card && card.state !== State.New && card.due) {
             const dueTime = new Date(card.due).getTime();
             if (dueTime > now) {
@@ -164,15 +223,16 @@ export const useFsrsStore = create<FsrsState>()(
       getNextCard: (deckId: string, words: string[]) => {
         const state = get();
         const t = new Date();
-        const learnAheadTime = new Date(t.getTime() + 20 * 60 * 1000); // 20 mins
 
         const dueLearning: string[] = [];
         const review: string[] = [];
         const newCards: string[] = [];
-        const aheadLearning: string[] = [];
 
         for (const w of words) {
-          const card = state.cards[w];
+          const scopedKey = getFsrsCardKey(deckId, w);
+          if (state.masteredWords[scopedKey]) continue;
+
+          const card = state.cards[scopedKey] || state.cards[w];
           if (!card || card.state === State.New) {
             newCards.push(w);
           } else if (card.state === State.Learning || card.state === State.Relearning) {
@@ -180,8 +240,6 @@ export const useFsrsStore = create<FsrsState>()(
               const dueTime = new Date(card.due).getTime();
               if (dueTime <= t.getTime()) {
                 dueLearning.push(w);
-              } else if (dueTime <= learnAheadTime.getTime()) {
-                aheadLearning.push(w);
               }
             }
           } else if (card.state === State.Review) {
@@ -191,10 +249,15 @@ export const useFsrsStore = create<FsrsState>()(
           }
         }
 
+        const dueTimeFor = (word: string) => {
+          const scopedKey = getFsrsCardKey(deckId, word);
+          const card = state.cards[scopedKey] || state.cards[word];
+          return card?.due ? new Date(card.due).getTime() : 0;
+        };
+
         // Sort by due date (ascending) so the most overdue/soonest comes first
-        dueLearning.sort((a, b) => new Date(state.cards[a].due!).getTime() - new Date(state.cards[b].due!).getTime());
-        review.sort((a, b) => new Date(state.cards[a].due!).getTime() - new Date(state.cards[b].due!).getTime());
-        aheadLearning.sort((a, b) => new Date(state.cards[a].due!).getTime() - new Date(state.cards[b].due!).getTime());
+        dueLearning.sort((a, b) => dueTimeFor(a) - dueTimeFor(b));
+        review.sort((a, b) => dueTimeFor(a) - dueTimeFor(b));
 
         if (dueLearning.length > 0) return dueLearning[0];
         if (review.length > 0) return review[0];
@@ -203,20 +266,18 @@ export const useFsrsStore = create<FsrsState>()(
         if (newCards.length > 0) {
            return newCards[0];
         }
-        
-        if (aheadLearning.length > 0) return aheadLearning[0];
 
         return null;
       },
 
       getDailyStudiedCount: () => {
         const state = get();
-        const today = getTodayString();
+        const today = getLocalDateString();
         return state.dailyStats[today]?.studiedCount || 0;
       },
 
-      getNextIntervals: (word: string) => {
-        const card = get().getCard(word);
+      getNextIntervals: (deckId: string, word: string) => {
+        const card = get().getCard(deckId, word);
         const now = new Date();
         try {
           const scheduling_cards = fsrs.repeat(card, now);

@@ -1,9 +1,45 @@
 import { useAppStore } from '../store/useAppStore';
 import { Client } from '@upstash/qstash';
+import { getLocalDateString } from '../store/useFsrsStore';
+
+export type ReviewScheduleConfig = {
+  daysOfWeek: number[];
+  time: string;
+};
+
+export type ManagedQStashSchedule = {
+  scheduleId: string;
+  cron: string;
+  destination: string;
+  method: string;
+  isPaused: boolean;
+  createdAt: number;
+  nextScheduleTime?: number;
+  lastScheduleTime?: number;
+  label?: string;
+};
+
+export type NotificationConfigOverride = {
+  token: string;
+  webhookUrl: string;
+  webhookHeaders: string;
+  webhookTemplate: string;
+};
 
 export class NotificationService {
-  private static getHeaders() {
-    const { webhookHeaders } = useAppStore.getState();
+  private static getConfig(config?: NotificationConfigOverride) {
+    if (config) return config;
+    const { upstashQstashToken, webhookUrl, webhookHeaders, webhookTemplate } = useAppStore.getState();
+    return {
+      token: upstashQstashToken,
+      webhookUrl,
+      webhookHeaders,
+      webhookTemplate,
+    };
+  }
+
+  private static getHeaders(config?: NotificationConfigOverride) {
+    const { webhookHeaders } = this.getConfig(config);
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -24,8 +60,8 @@ export class NotificationService {
   }
 
 
-  private static getParsedBody(title: string, content: string) {
-    const { webhookTemplate } = useAppStore.getState();
+  private static getParsedBody(title: string, content: string, config?: NotificationConfigOverride) {
+    const { webhookTemplate } = this.getConfig(config);
     const bodyStr = webhookTemplate
       .replace(/\$title/g, title)
       .replace(/\$content/g, content)
@@ -38,8 +74,8 @@ export class NotificationService {
     }
   }
 
-  private static getReplacedUrl() {
-    const { webhookUrl } = useAppStore.getState();
+  private static getReplacedUrl(config?: NotificationConfigOverride) {
+    const { webhookUrl } = this.getConfig(config);
     return webhookUrl
       .replace(/\$url/g, window.location.origin)
       // If the user wants to substitute custom environment variables into the URL, 
@@ -47,9 +83,28 @@ export class NotificationService {
       ;
   }
 
-  private static canSend() {
-    const { upstashQstashToken, webhookUrl } = useAppStore.getState();
-    return !!upstashQstashToken && !!webhookUrl;
+  private static canSend(config?: NotificationConfigOverride) {
+    const { token, webhookUrl } = this.getConfig(config);
+    return !!token && !!webhookUrl;
+  }
+
+  static buildReviewCron({ daysOfWeek, time }: ReviewScheduleConfig) {
+    const [hourPart, minutePart] = time.split(':');
+    const hour = Number(hourPart);
+    const minute = Number(minutePart);
+    const uniqueDays = Array.from(new Set(daysOfWeek)).sort((a, b) => a - b);
+
+    if (!uniqueDays.length) {
+      throw new Error('Please select at least one reminder day');
+    }
+    if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      throw new Error('Please select a valid reminder time');
+    }
+    if (uniqueDays.some(day => !Number.isInteger(day) || day < 0 || day > 6)) {
+      throw new Error('Invalid reminder day selected');
+    }
+
+    return `${minute} ${hour} * * ${uniqueDays.join(',')}`;
   }
 
   /**
@@ -61,11 +116,11 @@ export class NotificationService {
     const now = Date.now();
     if (dueTime <= now) return; // Already due
 
-    const { upstashQstashToken } = useAppStore.getState();
+    const { token } = this.getConfig();
     const finalUrl = this.getReplacedUrl();
     const headers = this.getHeaders();
     
-    const client = new Client({ token: upstashQstashToken });
+    const client = new Client({ token });
 
     const body = this.getParsedBody("Word Due Reminder", `Review time for: ${word} is now!`);
     if (!body) return;
@@ -92,12 +147,13 @@ export class NotificationService {
     const now = Date.now();
     if (dueTimeMs <= now) return;
 
-    const { upstashQstashToken } = useAppStore.getState();
+    const { token } = this.getConfig();
     const finalUrl = this.getReplacedUrl();
     const headers = this.getHeaders();
 
-    const client = new Client({ token: upstashQstashToken });
-    const dateStr = new Date(dueTimeMs).toISOString().split('T')[0];
+    const client = new Client({ token });
+    const dueSecond = Math.floor(dueTimeMs / 1000);
+    const dateStr = getLocalDateString(new Date(dueTimeMs));
 
     const body = this.getParsedBody("Learning Time!", `You have words due for review. Let's keep the streak alive!`);
     if (!body) return;
@@ -107,8 +163,8 @@ export class NotificationService {
         url: finalUrl,
         body,
         headers,
-        notBefore: Math.floor(dueTimeMs / 1000),
-        deduplicationId: `batch-due-${dateStr}`
+        notBefore: dueSecond,
+        deduplicationId: `batch-due-${dueSecond}`
       });
       console.log(`Scheduled batch due notification for ${dateStr}`);
     } catch (e) {
@@ -117,29 +173,54 @@ export class NotificationService {
   }
 
   public static readonly SCHEDULE_ID = "mojo-daily-review";
+  private static readonly SCHEDULE_LABEL = "mojo-review";
 
-  static async getDailySchedule() {
-    if (!this.canSend()) return null;
-    const { upstashQstashToken } = useAppStore.getState();
-    const client = new Client({ token: upstashQstashToken });
+  static async listSchedules(config?: NotificationConfigOverride): Promise<ManagedQStashSchedule[]> {
+    if (!this.canSend(config)) return [];
+    const { token } = this.getConfig(config);
+    const client = new Client({ token });
+    try {
+      const schedules = await client.schedules.list();
+      return schedules.map(schedule => ({
+        scheduleId: schedule.scheduleId,
+        cron: schedule.cron,
+        destination: schedule.destination,
+        method: schedule.method,
+        isPaused: schedule.isPaused,
+        createdAt: schedule.createdAt,
+        nextScheduleTime: schedule.nextScheduleTime,
+        lastScheduleTime: schedule.lastScheduleTime,
+        label: schedule.label,
+      }));
+    } catch (error) {
+      console.error("Failed to list schedules", error);
+      return [];
+    }
+  }
+
+  static async getDailySchedule(config?: NotificationConfigOverride) {
+    if (!this.canSend(config)) return null;
+    const { token } = this.getConfig(config);
+    const client = new Client({ token });
     try {
       const res = await client.schedules.get(this.SCHEDULE_ID);
       return res;
-    } catch (e: any) {
-      if (e.message && e.message.includes("not found")) return null;
-      console.error("Failed to get daily schedule", e);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("not found")) return null;
+      console.error("Failed to get daily schedule", error);
       return null;
     }
   }
 
-  static async upsertDailySchedule(cron: string) {
-    if (!this.canSend()) throw new Error("Please configure QStash settings first");
-    const { upstashQstashToken } = useAppStore.getState();
-    const finalUrl = this.getReplacedUrl();
-    const headers = this.getHeaders();
-    const client = new Client({ token: upstashQstashToken });
+  static async upsertDailySchedule(configInput: ReviewScheduleConfig, config?: NotificationConfigOverride) {
+    if (!this.canSend(config)) throw new Error("Please configure QStash settings first");
+    const { token } = this.getConfig(config);
+    const finalUrl = this.getReplacedUrl(config);
+    const headers = this.getHeaders(config);
+    const client = new Client({ token });
+    const cron = this.buildReviewCron(configInput);
 
-    const body = this.getParsedBody("Daily Review Reminder", "It's time for your daily English learning session!");
+    const body = this.getParsedBody("Daily Review Reminder", "It's time for your daily English learning session!", config);
     if (!body) throw new Error("Invalid body template");
 
     await client.schedules.create({
@@ -148,33 +229,42 @@ export class NotificationService {
       cron,
       body: JSON.stringify(body),
       headers,
+      label: this.SCHEDULE_LABEL,
     });
   }
 
-  static async deleteDailySchedule() {
-    if (!this.canSend()) return;
-    const { upstashQstashToken } = useAppStore.getState();
-    const client = new Client({ token: upstashQstashToken });
+  static async deleteSchedule(scheduleId: string, config?: NotificationConfigOverride) {
+    if (!this.canSend(config)) return;
+    const { token } = this.getConfig(config);
+    const client = new Client({ token });
     try {
-      await client.schedules.delete(this.SCHEDULE_ID);
-    } catch (e) {
-      console.error("Failed to delete daily schedule", e);
+      await client.schedules.delete(scheduleId);
+    } catch (error) {
+      console.error("Failed to delete schedule", error);
     }
   }
 
-  static async toggleDailySchedule(pause: boolean) {
-    if (!this.canSend()) return;
-    const { upstashQstashToken } = useAppStore.getState();
-    const client = new Client({ token: upstashQstashToken });
+  static async deleteDailySchedule(config?: NotificationConfigOverride) {
+    await this.deleteSchedule(this.SCHEDULE_ID, config);
+  }
+
+  static async toggleSchedule(scheduleId: string, pause: boolean, config?: NotificationConfigOverride) {
+    if (!this.canSend(config)) return;
+    const { token } = this.getConfig(config);
+    const client = new Client({ token });
     try {
       if (pause) {
-        await client.schedules.pause({ schedule: this.SCHEDULE_ID });
+        await client.schedules.pause({ schedule: scheduleId });
       } else {
-        await client.schedules.resume({ schedule: this.SCHEDULE_ID });
+        await client.schedules.resume({ schedule: scheduleId });
       }
-    } catch (e) {
-      console.error("Failed to toggle daily schedule", e);
+    } catch (error) {
+      console.error("Failed to toggle schedule", error);
     }
+  }
+
+  static async toggleDailySchedule(pause: boolean, config?: NotificationConfigOverride) {
+    await this.toggleSchedule(this.SCHEDULE_ID, pause, config);
   }
 
   static async scheduleDailyReview(dueTimeMs: number) {
@@ -191,12 +281,12 @@ export class NotificationService {
         return; // Let the CRON handle it
     }
 
-    const { upstashQstashToken } = useAppStore.getState();
+    const { token } = this.getConfig();
     const finalUrl = this.getReplacedUrl();
     const headers = this.getHeaders();
-    const client = new Client({ token: upstashQstashToken });
+    const client = new Client({ token });
 
-    const dateStr = new Date(dueTimeMs).toISOString().split('T')[0];
+    const dateStr = getLocalDateString(new Date(dueTimeMs));
 
     const body = this.getParsedBody("Daily Review Reminder", `It's time for your daily English learning session!`);
     if (!body) return;

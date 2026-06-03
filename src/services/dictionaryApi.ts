@@ -26,15 +26,14 @@ export async function searchDictionary(query: string, options?: { forceAi?: bool
   const normalizedQuery = query.trim().toLowerCase();
 
   if (!options?.forceAi) {
-    // Try AI Cache first
-    const cached = await getAiCache(normalizedQuery);
-    if (cached) {
-      return cached;
-    }
-
     const localResult = await searchOfflineDictionary(query);
     if (localResult) {
       return formatOfflineWord(localResult);
+    }
+
+    const cached = await getAiCache(normalizedQuery);
+    if (cached) {
+      return cached;
     }
   }
 
@@ -60,7 +59,7 @@ Return ONLY valid JSON.
 `;
     
     // Attempt fallback via LLM
-    const response = await chatCompletion([{ role: 'user', content: `Word to look up: "${query}"` }], systemPrompt);
+    const response = await chatCompletion([{ role: 'user', content: `Word to look up: "${query}"` }], systemPrompt, { task: 'dictionary-lookup' });
     const cleanedResponse = response.replace(/^```json\n?/, '').replace(/```$/, '').trim();
     const result = JSON.parse(cleanedResponse);
     

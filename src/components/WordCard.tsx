@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Volume2, BookmarkPlus, Sparkles, ArrowRightLeft, Quote, Bot, BookOpen } from 'lucide-react';
 
 import { useAppStore } from '../store/useAppStore';
-import { translations } from '../lib/i18n';
+import { translations, type Language } from '../lib/i18n';
 
 export interface WordDetail {
   id: string;
@@ -20,26 +20,30 @@ export interface WordDetail {
   detail?: Array<{ en: string; cn: string }>;
 }
 
-const EXCHANGE_MAP: Record<string, string> = {
-  p: 'Plural',
-  d: 'Past',
-  i: 'V-ing',
-  '3': '3rd Pers',
-  s: 'Comp.',
-  t: 'Super.',
-  f: 'Verb',
-  '1': 'Noun',
-  '0': 'Lemma',
-  c: 'Noun'
+const getExchangeMap = (language: Language): Record<string, string> => {
+  const t = translations[language];
+  return {
+    p: t.exchangePlural,
+    d: t.exchangePast,
+    i: t.exchangeVing,
+    '3': t.exchangeThirdPerson,
+    s: t.exchangeComparative,
+    t: t.exchangeSuperlative,
+    f: t.exchangeVerb,
+    '1': t.exchangeNoun,
+    '0': t.exchangeLemma,
+    c: t.exchangeNoun
+  };
 };
 
-export function parseExchange(exchangeStr: string | undefined) {
+export function parseExchange(exchangeStr: string | undefined, language: Language = 'en') {
   if (!exchangeStr) return [];
+  const exchangeMap = getExchangeMap(language);
   const parts = exchangeStr.split('/');
   return parts.map(p => {
     const [key, val] = p.split(':');
     return {
-      type: EXCHANGE_MAP[key] || key,
+      type: exchangeMap[key] || key,
       word: val
     };
   }).filter(e => e.word);
@@ -62,10 +66,10 @@ export function WordCard({ word, isShowAnswer }: WordCardProps) {
     audio.play().catch(err => {
       // Browsers often throw NotSupportedError for 404/500 media responses
       if (err.name === 'NotSupportedError') {
-        setAudioError('Audio not available');
+        setAudioError(t.audioNotAvailable);
         console.warn(`Pronunciation not available for "${word.word}"`);
       } else {
-        setAudioError('Audio play failed');
+        setAudioError(t.audioPlayFailed);
         console.warn("Audio play failed:", err.message);
       }
     });
@@ -85,16 +89,16 @@ export function WordCard({ word, isShowAnswer }: WordCardProps) {
            {word.id.startsWith('ai-') ? (
              <div className="flex items-center gap-1 px-2 py-1 bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400 rounded text-[10px] md:text-xs font-bold uppercase transition-colors shrink-0">
                <Bot size={12} />
-               <span>{t.aiGenerated || 'AI Generated'}</span>
+                <span>{t.aiGenerated}</span>
              </div>
            ) : word.id.startsWith('dict-') ? (
              <div className="flex items-center gap-1 px-2 py-1 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 rounded text-[10px] md:text-xs font-bold uppercase transition-colors shrink-0">
                <BookOpen size={12} />
-               <span>{t.ecdictLocal || 'ECDICT'}</span>
+                <span>{t.ecdictLocal}</span>
              </div>
            ) : null}
            {word.oxford === 1 && (
-             <span className="px-2 py-0.5 bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400 rounded text-[10px] md:text-xs font-bold uppercase transition-colors shrink-0">Oxford</span>
+              <span className="px-2 py-0.5 bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400 rounded text-[10px] md:text-xs font-bold uppercase transition-colors shrink-0">{t.oxford}</span>
            )}
            {word.collins > 0 && (
              <span className="text-amber-400 text-sm md:text-base tracking-widest mr-2 select-none">{"★".repeat(word.collins)}</span>
@@ -115,14 +119,14 @@ export function WordCard({ word, isShowAnswer }: WordCardProps) {
                     onClick={(e) => handlePlayAudio(1, e)}
                     className="flex items-center gap-1.5 px-2 py-1 rounded-md text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-400 hover:bg-white dark:hover:bg-slate-800 transition-all text-xs font-bold"
                   >
-                    <Volume2 size={14} /> UK
+                    <Volume2 size={14} /> {t.uk}
                   </button>
                   <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700"></div>
                   <button 
                     onClick={(e) => handlePlayAudio(2, e)}
                     className="flex items-center gap-1.5 px-2 py-1 rounded-md text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-400 hover:bg-white dark:hover:bg-slate-800 transition-all text-xs font-bold"
                   >
-                    <Volume2 size={14} /> US
+                    <Volume2 size={14} /> {t.us}
                   </button>
                 </div>
                 {audioError && <span className="text-rose-500 dark:text-rose-400 text-xs font-medium bg-rose-50 dark:bg-rose-900/40 px-2 py-1 rounded-md">{audioError}</span>}
@@ -145,7 +149,7 @@ export function WordCard({ word, isShowAnswer }: WordCardProps) {
                   <div className="flex gap-3">
                     <div className="w-1 h-5 bg-blue-400 dark:bg-blue-500 rounded-full shrink-0 mt-1"></div>
                     <div className="flex flex-col">
-                      <h4 className="font-bold text-slate-400 dark:text-slate-500 text-[10px] md:text-xs uppercase tracking-widest mb-1">Translation</h4>
+                      <h4 className="font-bold text-slate-400 dark:text-slate-500 text-[10px] md:text-xs uppercase tracking-widest mb-1">{t.translation}</h4>
                       <p className="text-lg md:text-xl text-slate-700 dark:text-slate-200 font-medium whitespace-pre-line leading-relaxed flex-1">
                         {word.translation}
                       </p>
@@ -155,7 +159,7 @@ export function WordCard({ word, isShowAnswer }: WordCardProps) {
 
                 {word.definition && (
                   <div className="p-4 md:p-5 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800 transition-colors">
-                    <h4 className="font-bold text-slate-400 dark:text-slate-500 text-[10px] md:text-xs uppercase tracking-widest mb-2">Definition</h4>
+                    <h4 className="font-bold text-slate-400 dark:text-slate-500 text-[10px] md:text-xs uppercase tracking-widest mb-2">{t.definition}</h4>
                     <p className="text-slate-600 dark:text-slate-300 text-sm md:text-base leading-relaxed whitespace-pre-line font-serif italic">
                       {word.definition}
                     </p>
@@ -166,7 +170,7 @@ export function WordCard({ word, isShowAnswer }: WordCardProps) {
                   <div className="flex flex-col gap-4 mt-2">
                     <h4 className="font-bold text-slate-800 dark:text-slate-200 text-sm flex items-center gap-2">
                       <Quote size={16} className="text-blue-500" />
-                      Examples
+                      {t.examples}
                     </h4>
                     <div className="space-y-4">
                       {word.detail.map((ex, i) => (
@@ -190,11 +194,11 @@ export function WordCard({ word, isShowAnswer }: WordCardProps) {
                 {(word.bnc > 0 || word.frq > 0) && (
                   <div className="grid grid-cols-2 gap-3">
                     <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800 transition-colors">
-                      <div className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 mb-1">BNC Freq</div>
+                      <div className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 mb-1">{t.bncFreq}</div>
                       <div className="text-lg font-bold text-slate-700 dark:text-slate-300">{word.bnc > 0 ? word.bnc : '-'}</div>
                     </div>
                     <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800 transition-colors">
-                      <div className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 mb-1">COCA Freq</div>
+                      <div className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 mb-1">{t.cocaFreq}</div>
                       <div className="text-lg font-bold text-slate-700 dark:text-slate-300">{word.frq > 0 ? word.frq : '-'}</div>
                     </div>
                   </div>
@@ -203,7 +207,7 @@ export function WordCard({ word, isShowAnswer }: WordCardProps) {
                   <div>
                     <h4 className="font-bold text-slate-800 dark:text-slate-200 mb-3 text-xs uppercase tracking-widest flex items-center gap-2">
                       <Sparkles size={14} className="text-amber-500" />
-                      Tags
+                      {t.tags}
                     </h4>
                     <div className="flex flex-wrap gap-1.5">
                       {word.tag.split(' ').map(t => (
@@ -217,10 +221,10 @@ export function WordCard({ word, isShowAnswer }: WordCardProps) {
                   <div>
                     <h4 className="font-bold text-slate-800 dark:text-slate-200 mb-3 text-xs uppercase tracking-widest flex items-center gap-2">
                       <ArrowRightLeft size={14} className="text-blue-500" />
-                      Word Forms
+                      {t.wordForms}
                     </h4>
                     <div className="flex flex-col gap-2">
-                      {parseExchange(word.exchange).map(e => (
+                      {parseExchange(word.exchange, language).map(e => (
                          <div key={e.type} className="flex items-baseline justify-between py-1 border-b border-slate-100 dark:border-slate-800/60 last:border-0 transition-colors">
                            <span className="text-slate-400 dark:text-slate-500 text-xs">{e.type}</span>
                            <span className="text-slate-700 dark:text-slate-300 font-medium text-xs md:text-sm">{e.word}</span>
@@ -232,7 +236,7 @@ export function WordCard({ word, isShowAnswer }: WordCardProps) {
                 
                 <button className="hidden md:flex items-center justify-center gap-2 text-slate-500 dark:text-slate-400 hover:text-yellow-500 dark:hover:text-yellow-400 hover:bg-yellow-50 dark:hover:bg-yellow-900/20 transition-colors p-3 rounded-xl border border-slate-200 dark:border-slate-700/50 mt-auto font-medium shadow-sm">
                   <BookmarkPlus size={18} />
-                  Save
+                  {t.save}
                 </button>
               </div>
             </div>
