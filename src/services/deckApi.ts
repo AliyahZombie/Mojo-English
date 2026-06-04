@@ -3,6 +3,7 @@ import JSZip from 'jszip';
 import initSqlJs from 'sql.js';
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import { decompress } from 'fzstd';
+import { normalizeDeckWord } from '../lib/decks';
 
 export const uploadAndParseApkg = async (file: File): Promise<Deck> => {
   // Load and unzip the apkg file
@@ -50,7 +51,7 @@ export const uploadAndParseApkg = async (file: File): Promise<Deck> => {
       }
       
       // Remove HTML tags for clean words
-      w = w.replace(/<[^>]*>?/gm, '').trim();
+      w = normalizeDeckWord(w.replace(/<[^>]*>?/gm, ''));
 
       if (w && !seen.has(w)) {
         seen.add(w);

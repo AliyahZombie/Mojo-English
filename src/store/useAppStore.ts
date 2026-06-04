@@ -8,6 +8,34 @@ const defaultTavilyApiKey = import.meta.env.VITE_TAVILY_API_KEY || '';
 
 export const DEFAULT_STORY_PROMPT = 'Write an engaging, coherent English story for language learners. Keep the story concise, natural, and easy to read.';
 
+export type AssistantReplyStyle = 'cute' | 'precise';
+
+export interface NewsCompletionRecord {
+  articleId: string;
+  title: string;
+  completedAt: number;
+}
+
+export type NewsHistoryByDate = Record<string, NewsCompletionRecord[]>;
+
+export interface AssistantMemoryRecord {
+  id: string;
+  title: string;
+  content: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AssistantScheduleRecord {
+  id: string;
+  title: string;
+  content: string;
+  dueAt: number;
+  createdAt: number;
+  status: 'planned' | 'sent' | 'failed';
+  errorMessage?: string;
+}
+
 export interface Provider {
   id: string;
   name: string;
@@ -143,6 +171,11 @@ interface AppState {
   stories: Story[];
   activeEssayId: string | null;
   newsQuizStates: NewsQuizStateByArticleId;
+  newsHistoryByDate: NewsHistoryByDate;
+  assistantReplyStyle: AssistantReplyStyle;
+  hasSeenAssistantStylePrompt: boolean;
+  assistantMemories: AssistantMemoryRecord[];
+  assistantSchedules: AssistantScheduleRecord[];
   
   isAssistantOpen: boolean;
   alertData: AlertData | null;
@@ -178,6 +211,13 @@ interface AppState {
   addStory: (story: Story) => void;
   deleteStory: (id: string) => void;
   setNewsQuizArticleState: (articleId: string, updates: Partial<NewsQuizArticleState>) => void;
+  recordNewsCompletion: (record: Omit<NewsCompletionRecord, 'completedAt'> & { completedAt?: number }) => void;
+  setAssistantReplyStyle: (style: AssistantReplyStyle) => void;
+  setHasSeenAssistantStylePrompt: (seen: boolean) => void;
+  upsertAssistantMemory: (memory: Omit<AssistantMemoryRecord, 'createdAt' | 'updatedAt'> & { createdAt?: number; updatedAt?: number }) => AssistantMemoryRecord;
+  deleteAssistantMemory: (id: string) => void;
+  addAssistantSchedule: (schedule: Omit<AssistantScheduleRecord, 'createdAt' | 'status'> & { createdAt?: number; status?: AssistantScheduleRecord['status'] }) => AssistantScheduleRecord;
+  updateAssistantSchedule: (id: string, updates: Partial<AssistantScheduleRecord>) => void;
 }
 
 function createDefaultNewsQuizArticleState(): NewsQuizArticleState {
@@ -225,6 +265,11 @@ export const useAppStore = create<AppState>()(
       stories: [],
       activeEssayId: null,
       newsQuizStates: {},
+      newsHistoryByDate: {},
+      assistantReplyStyle: 'cute',
+      hasSeenAssistantStylePrompt: false,
+      assistantMemories: [],
+      assistantSchedules: [],
       isAssistantOpen: false,
       alertData: null,
       
@@ -296,6 +341,60 @@ export const useAppStore = create<AppState>()(
           },
         },
       })),
+      recordNewsCompletion: (record) => set((state) => {
+        const completedAt = record.completedAt ?? Date.now();
+        const date = new Date(completedAt);
+        const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        const currentRecords = state.newsHistoryByDate[dateKey] || [];
+        const nextRecord: NewsCompletionRecord = {
+          articleId: record.articleId,
+          title: record.title,
+          completedAt,
+        };
+        const withoutDuplicate = currentRecords.filter(item => item.articleId !== record.articleId);
+        return {
+          newsHistoryByDate: {
+            ...state.newsHistoryByDate,
+            [dateKey]: [nextRecord, ...withoutDuplicate].slice(0, 20),
+          },
+        };
+      }),
+      setAssistantReplyStyle: (style) => set({ assistantReplyStyle: style }),
+      setHasSeenAssistantStylePrompt: (seen) => set({ hasSeenAssistantStylePrompt: seen }),
+      upsertAssistantMemory: (memory) => {
+        const now = Date.now();
+        const nextMemory: AssistantMemoryRecord = {
+          id: memory.id,
+          title: memory.title,
+          content: memory.content,
+          createdAt: memory.createdAt ?? now,
+          updatedAt: memory.updatedAt ?? now,
+        };
+        set((state) => {
+          const exists = state.assistantMemories.some(item => item.id === nextMemory.id);
+          return {
+            assistantMemories: exists
+              ? state.assistantMemories.map(item => item.id === nextMemory.id ? { ...item, ...nextMemory, createdAt: item.createdAt } : item)
+              : [nextMemory, ...state.assistantMemories],
+          };
+        });
+        return nextMemory;
+      },
+      deleteAssistantMemory: (id) => set((state) => ({
+        assistantMemories: state.assistantMemories.filter(memory => memory.id !== id),
+      })),
+      addAssistantSchedule: (schedule) => {
+        const nextSchedule: AssistantScheduleRecord = {
+          ...schedule,
+          createdAt: schedule.createdAt ?? Date.now(),
+          status: schedule.status ?? 'planned',
+        };
+        set((state) => ({ assistantSchedules: [nextSchedule, ...state.assistantSchedules] }));
+        return nextSchedule;
+      },
+      updateAssistantSchedule: (id, updates) => set((state) => ({
+        assistantSchedules: state.assistantSchedules.map(schedule => schedule.id === id ? { ...schedule, ...updates } : schedule),
+      })),
     }),
     {
       name: 'mojo-app-store',
@@ -321,7 +420,12 @@ export const useAppStore = create<AppState>()(
         essays: state.essays,
         stories: state.stories,
         activeEssayId: state.activeEssayId,
-        newsQuizStates: state.newsQuizStates
+        newsQuizStates: state.newsQuizStates,
+        newsHistoryByDate: state.newsHistoryByDate,
+        assistantReplyStyle: state.assistantReplyStyle,
+        hasSeenAssistantStylePrompt: state.hasSeenAssistantStylePrompt,
+        assistantMemories: state.assistantMemories,
+        assistantSchedules: state.assistantSchedules
       })
     }
   )

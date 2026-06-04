@@ -37,7 +37,7 @@ function StatCard({
 import { getLocalDateString, useFsrsStore } from '../store/useFsrsStore';
 
 export function Home() {
-  const { dailyGoal, language, isAssistantOpen, toggleAssistant, analyticsConsent, analyticsOnlineUsers, setAnalyticsConsent, showAlert, decks, activeDeckId } = useAppStore();
+  const { dailyGoal, language, isAssistantOpen, toggleAssistant, analyticsConsent, analyticsOnlineUsers, setAnalyticsConsent, showAlert, decks, activeDeckId, newsHistoryByDate } = useAppStore();
   const { getDailyStudiedCount, dailyStats } = useFsrsStore();
   const t = translations[language];
   const studiedToday = getDailyStudiedCount();
@@ -105,6 +105,28 @@ export function Home() {
     }
     return chartData;
   }, [language, dailyStats]);
+
+  const dashboardAssistantContext = useMemo(() => {
+    const recentDays = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = getLocalDateString(d);
+      const stats = dailyStats[dateStr];
+      const words = stats?.studiedWordEntries?.map(entry => entry.word) || stats?.studiedKeys?.map(key => key.includes('::') ? key.slice(key.indexOf('::') + 2) : key) || [];
+      const completedNews = newsHistoryByDate[dateStr]?.map(record => record.title) || [];
+      recentDays.push({ date: dateStr, studiedCount: stats?.studiedCount || 0, words, completedNews });
+    }
+
+    return [
+      'Dashboard learning progress context:',
+      `Today studied words: ${studiedToday}/${dailyGoal}`,
+      `Current streak: ${streakCount} days`,
+      activeDeck ? `Active wordbook: ${activeDeck.name}` : 'Active wordbook: none',
+      'Recent 7 days:',
+      JSON.stringify(recentDays),
+    ].join('\n');
+  }, [activeDeck, dailyGoal, dailyStats, newsHistoryByDate, streakCount, studiedToday]);
 
   return (
     <div className="w-full h-full flex gap-6 relative">
@@ -252,6 +274,7 @@ export function Home() {
             contextId="home_dashboard"
             title={t.dashboardAssistant}
             description={t.dashboardAssistantDesc}
+            systemContext={dashboardAssistantContext}
             className="h-full shadow-sm"
             onClose={toggleAssistant}
           />
@@ -281,6 +304,7 @@ export function Home() {
                 contextId="home_dashboard"
                 title={t.dashboardAssistant}
                 description={t.dashboardAssistantDesc}
+                systemContext={dashboardAssistantContext}
                 onClose={toggleAssistant}
                 className="rounded-none border-none shadow-none h-full"
                 isEmbedded={true}

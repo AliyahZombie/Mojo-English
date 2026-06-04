@@ -4,7 +4,7 @@ import type { WordDetail } from '../components/WordCard';
 import { useAppStore } from '../store/useAppStore';
 import { getFsrsCardKey, useFsrsStore } from '../store/useFsrsStore';
 import { searchDictionary } from '../services/dictionaryApi';
-import { Loader2, BookA, Trophy, RefreshCw, X, CalendarClock, Trash2, ChevronLeft, Star, Volume2 } from 'lucide-react';
+import { Loader2, BookA, Trophy, RefreshCw, X, CalendarClock, Trash2, ChevronLeft, Star, Volume2, MessageCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { ChatAssistant } from '../components/ChatAssistant';
 import { cn } from '../lib/utils';
@@ -239,6 +239,18 @@ export function Words() {
             <p className="truncate text-sm font-semibold text-white/70 max-[380px]:text-xs">{activeDeck.name}</p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={toggleAssistant}
+              className={cn(
+                "flex h-10 w-10 items-center justify-center rounded-full transition-colors max-[380px]:h-8 max-[380px]:w-8",
+                isAssistantOpen
+                  ? "bg-blue-400/20 text-blue-200 ring-1 ring-blue-300/30"
+                  : "bg-white/10 text-white/75 hover:bg-white/15 hover:text-white"
+              )}
+              title={t.aiAssistantTitle}
+            >
+              <MessageCircle size={20} />
+            </button>
             <button onClick={() => setIsDeckPickerOpen(true)} className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-yellow-300 transition-colors hover:bg-white/15 max-[380px]:h-8 max-[380px]:w-8" title={t.addToDeck}>
               <Star size={20} />
             </button>

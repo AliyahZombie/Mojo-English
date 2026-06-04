@@ -8,9 +8,7 @@ import { translations } from '../lib/i18n';
 
 export function Navigation() {
   const location = useLocation();
-  const { hasConfigured, activeProviderId, providers, language } = useAppStore();
-  const activeProvider = providers && Array.isArray(providers) ? providers.find(p => p.id === activeProviderId) : null;
-  const activeProviderName = activeProvider ? activeProvider.name : 'LLM';
+  const { hasConfigured, language } = useAppStore();
   const t = translations[language];
 
   const links = [
@@ -59,14 +57,6 @@ export function Navigation() {
             );
           })}
         </nav>
-        
-        <div className="mt-auto p-4 bg-gradient-to-tr from-blue-500 to-blue-400 dark:from-blue-600 dark:to-blue-500 rounded-3xl text-white shadow-md shadow-blue-500/20 dark:shadow-none">
-          <p className="text-xs opacity-80 uppercase tracking-widest mb-1">{t.providerStatus}</p>
-          <p className="font-bold truncate text-sm" title={activeProviderName}>{activeProviderName} {t.connected}</p>
-          <div className="mt-3 bg-white/20 h-1.5 rounded-full overflow-hidden">
-            <div className="bg-white w-3/4 h-full rounded-full"></div>
-          </div>
-        </div>
       </div>
     </>
   );

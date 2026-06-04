@@ -6,7 +6,15 @@ export interface DailyStats {
   date: string; // YYYY-MM-DD
   studiedCount: number;
   studiedKeys?: string[];
+  studiedWordEntries?: DailyStudiedWordEntry[];
   legacyStudiedCount?: number;
+}
+
+export interface DailyStudiedWordEntry {
+  key: string;
+  word: string;
+  deckId: string;
+  recordedAt: number;
 }
 
 interface FsrsState {
@@ -66,11 +74,33 @@ function rehydrateCard(card: Card): Card {
   };
 }
 
+function wordFromStudyKey(studyKey: string) {
+  const separatorIndex = studyKey.indexOf('::');
+  return separatorIndex === -1 ? studyKey : studyKey.slice(separatorIndex + 2);
+}
+
+function deckIdFromStudyKey(studyKey: string) {
+  const separatorIndex = studyKey.indexOf('::');
+  return separatorIndex === -1 ? '' : studyKey.slice(0, separatorIndex);
+}
+
 function recordDailyStudy(stats: Record<string, DailyStats>, studyKey: string) {
   const today = getLocalDateString();
   const currentStats = stats[today] || { date: today, studiedCount: 0 };
   const existingKeys = currentStats.studiedKeys || [];
   const studiedKeys = existingKeys.includes(studyKey) ? existingKeys : [...existingKeys, studyKey];
+  const existingEntries = currentStats.studiedWordEntries || [];
+  const studiedWordEntries = existingEntries.some(entry => entry.key === studyKey)
+    ? existingEntries
+    : [
+      ...existingEntries,
+      {
+        key: studyKey,
+        word: wordFromStudyKey(studyKey),
+        deckId: deckIdFromStudyKey(studyKey),
+        recordedAt: Date.now(),
+      }
+    ];
   const legacyBaseCount = currentStats.legacyStudiedCount ?? (currentStats.studiedKeys ? 0 : currentStats.studiedCount);
 
   return {
@@ -79,6 +109,7 @@ function recordDailyStudy(stats: Record<string, DailyStats>, studyKey: string) {
       ...currentStats,
       legacyStudiedCount: legacyBaseCount,
       studiedKeys,
+      studiedWordEntries,
       studiedCount: legacyBaseCount + studiedKeys.length
     }
   };
@@ -97,14 +128,18 @@ export const useFsrsStore = create<FsrsState>()(
       initQueue: (deckId: string, words: string[] = []) => {
         set((state) => {
           const migratedCards = { ...state.cards };
+          const migratedMasteredWords = { ...state.masteredWords };
           for (const word of words) {
             const scopedKey = getFsrsCardKey(deckId, word);
             if (!migratedCards[scopedKey] && migratedCards[word]) {
               migratedCards[scopedKey] = migratedCards[word];
             }
+            if (!migratedMasteredWords[scopedKey] && migratedMasteredWords[word]) {
+              migratedMasteredWords[scopedKey] = migratedMasteredWords[word];
+            }
           }
 
-          return { activeQueueDeckId: deckId, cards: migratedCards };
+          return { activeQueueDeckId: deckId, cards: migratedCards, masteredWords: migratedMasteredWords };
         });
       },
 
@@ -126,7 +161,8 @@ export const useFsrsStore = create<FsrsState>()(
       },
 
       isWordMastered: (deckId: string, word: string) => {
-        return !!get().masteredWords[getFsrsCardKey(deckId, word)];
+        const state = get();
+        return !!(state.masteredWords[getFsrsCardKey(deckId, word)] || state.masteredWords[word]);
       },
 
       processReview: (deckId: string, word: string, rating: Rating, now = new Date()) => {

@@ -16,6 +16,7 @@ import { NewsApiSettingsSection } from '../components/setup/NewsApiSettingsSecti
 import { createConfigBackup, createZustandPersistValue, getConfigBackupFileName, restoreConfigBackup } from '../services/configBackup';
 import { testProviderConnection } from '../services/llm';
 import type { Provider } from '../store/useAppStore';
+import type { AssistantReplyStyle } from '../store/useAppStore';
 import type { ManagedQStashSchedule, NotificationConfigOverride, ReviewScheduleConfig } from '../services/notificationService';
 
 const PRESET_PREFS = [
@@ -49,7 +50,8 @@ export function Setup() {
     language, theme, toggleTheme, upstashQstashToken, webhookUrl, 
     webhookTemplate, setNotificationConfig, webhookHeaders,
     newsdataApiKey, setNewsdataApiKey, tavilyApiKey, setTavilyApiKey,
-    analyticsConsent, setAnalyticsConsent
+    analyticsConsent, setAnalyticsConsent,
+    assistantReplyStyle, setAssistantReplyStyle
   } = useAppStore();
   
   const t = translations[language];
@@ -82,6 +84,7 @@ export function Setup() {
   });
   const [localActiveProviderId, setLocalActiveProviderId] = useState(activeProviderId);
   const [localStoryPrompt, setLocalStoryPrompt] = useState(storyPrompt);
+  const [localAssistantReplyStyle, setLocalAssistantReplyStyle] = useState<AssistantReplyStyle>(assistantReplyStyle || 'cute');
   
   const [prefs, setPrefs] = useState<string[]>(preferences);
   const [localDailyGoal, setLocalDailyGoal] = useState<number>(dailyGoal || 5);
@@ -508,6 +511,7 @@ export function Setup() {
   const persistSettings = () => {
     replaceProviders(localProviders, localActiveProviderId);
     setStoryPrompt(localStoryPrompt);
+    setAssistantReplyStyle(localAssistantReplyStyle);
     
     setPreferences(prefs);
     setDailyGoal(localDailyGoal);
@@ -586,6 +590,31 @@ export function Setup() {
             className="w-full resize-y bg-white dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-2xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-200 text-sm leading-6"
             placeholder={t.storyPromptPlaceholder}
           />
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 md:p-8 shadow-sm border border-blue-50 dark:border-slate-800 transition-colors">
+          <div className="mb-4">
+            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 transition-colors">{t.assistantStyleTitle}</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">{t.assistantStyleDesc}</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {(['cute', 'precise'] as AssistantReplyStyle[]).map((style) => (
+              <button
+                key={style}
+                type="button"
+                onClick={() => setLocalAssistantReplyStyle(style)}
+                className={cn(
+                  "rounded-2xl border px-4 py-4 text-left transition-colors",
+                  localAssistantReplyStyle === style
+                    ? "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                    : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-400 dark:hover:bg-slate-800/60"
+                )}
+              >
+                <span className="block text-sm font-bold">{style === 'cute' ? t.assistantStyleCute : t.assistantStylePrecise}</span>
+                <span className="mt-1 block text-xs opacity-80">{style === 'cute' ? t.assistantStyleCuteDesc : t.assistantStylePreciseDesc}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
         <NotificationSettingsSection

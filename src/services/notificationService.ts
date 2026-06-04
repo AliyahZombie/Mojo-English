@@ -304,4 +304,25 @@ export class NotificationService {
       console.error("Failed to schedule daily review notification", e);
     }
   }
+
+  static async scheduleAssistantNotification(title: string, content: string, dueTimeMs: number, deduplicationId: string) {
+    if (!this.canSend()) throw new Error("Please configure QStash settings first");
+    const now = Date.now();
+    if (dueTimeMs <= now) throw new Error("Please choose a future reminder time");
+
+    const { token } = this.getConfig();
+    const finalUrl = this.getReplacedUrl();
+    const headers = this.getHeaders();
+    const client = new Client({ token });
+    const body = this.getParsedBody(title, content);
+    if (!body) throw new Error("Invalid body template");
+
+    await client.publishJSON({
+      url: finalUrl,
+      body,
+      headers,
+      notBefore: Math.floor(dueTimeMs / 1000),
+      deduplicationId,
+    });
+  }
 }

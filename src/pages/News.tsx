@@ -33,6 +33,7 @@ export function News() {
     language,
     newsQuizStates,
     setNewsQuizArticleState,
+    recordNewsCompletion,
   } = useAppStore();
   const t = translations[language];
   const [feedItems, setFeedItems] = useState<NewsFeedItem[]>([]);
@@ -438,6 +439,7 @@ export function News() {
       const evaluation = await evaluateNewsShortAnswer({ article: selectedArticle, answer: activeQuizState.shortAnswerDraft });
       if (selectedArticleId) {
         setNewsQuizArticleState(selectedArticleId, { shortAnswerEvaluation: evaluation });
+        recordNewsCompletion({ articleId: selectedArticleId, title: selectedArticle.title });
       }
     } finally {
       setIsEvaluatingShortAnswer(false);

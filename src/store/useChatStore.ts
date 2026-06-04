@@ -2,6 +2,36 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { EssayAnnotation } from './useAppStore';
 
+export interface ChatAttachment {
+  id: string;
+  label: string;
+  content: string;
+}
+
+export interface ChatToolEvent {
+  id: string;
+  toolName: 'CreateWritingTopic' | 'Schedule' | 'ReadNews' | 'Memory' | 'Essays';
+  status: 'requested' | 'completed' | 'failed';
+  input: string;
+  output?: string;
+  action?: {
+    type: 'open-writing';
+    label?: string;
+    payload: {
+      topic: string;
+      sourceTitle?: string;
+      sourceType?: 'story' | 'news';
+      sourceContent?: string;
+    };
+  };
+  createdAt: number;
+  completedAt?: number;
+}
+
+export type ChatMessagePart =
+  | { id: string; type: 'text'; content: string }
+  | { id: string; type: 'tool-event'; toolEventId: string };
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -9,6 +39,10 @@ export interface ChatMessage {
   content: string;
   reasoning?: string;
   createdAt: number;
+  modelContent?: string;
+  attachments?: ChatAttachment[];
+  toolEvents?: ChatToolEvent[];
+  parts?: ChatMessagePart[];
   // Payload for evaluation types
   evaluation?: {
     score: number;

@@ -16,14 +16,15 @@
 ## Completion Workflow
 - Conserve local CPU and memory: prefer the lightest verification that matches the change; avoid heavy checks for docs-only edits unless the user asks.
 - Do not launch or automate a browser unless the user explicitly asks for browser inspection.
-- After completing code changes, run the relevant verification, then expose the app preview on `0.0.0.0:7888` for user inspection when useful.
-- For UI or behavior changes, prefer the full preview flow after verification:
+- After completing code changes, run the relevant verification, then restart and expose the app preview on `0.0.0.0:7888` for user inspection when useful.
+- For UI or behavior changes, use the full preview flow after verification and always restart the preview, even when one is already running:
   1. Build first: `npm run build`.
   2. Check whether the preview port is already occupied: `ss -ltnp '( sport = :7888 )' || true`.
-  3. If a valid Vite preview is already listening on `0.0.0.0:7888`, leave it running unless a restart is necessary.
-  4. Start preview in the background with explicit host/port and a log file: `nohup npm run preview -- --host 0.0.0.0 --port 7888 > /tmp/mojo-vite-preview.log 2>&1 &`.
-  5. Wait briefly, then verify it is listening: `sleep 2; ss -ltnp '( sport = :7888 )' || true`.
-- Do not use broad process-kill patterns such as `pkill -f "vite preview.*7888"`; they can match the current shell/tool command and hang or terminate the wrong process. If a restart is required, identify the specific PID from `ss -ltnp '( sport = :7888 )'` and stop only that PID.
+  3. If anything is listening on `0.0.0.0:7888` or `[::]:7888`, identify the specific PID from `ss` and stop only that PID.
+  4. Verify the port is clear: `ss -ltnp '( sport = :7888 )' || true`.
+  5. Start preview in the background with explicit host/port and a log file: `nohup npm run preview -- --host 0.0.0.0 --port 7888 > /tmp/mojo-vite-preview.log 2>&1 &`.
+  6. Wait briefly, then verify it is listening: `sleep 2; ss -ltnp '( sport = :7888 )' || true`.
+- Do not use broad process-kill patterns such as `pkill -f "vite preview.*7888"`; they can match the current shell/tool command and hang or terminate the wrong process. Always identify the specific PID from `ss -ltnp '( sport = :7888 )'` and stop only that PID before starting a fresh preview.
 
 ## Tooling And Paths
 - Import alias `@/*` resolves to the repository root (`./`) in both `tsconfig.json` and `vite.config.ts`.

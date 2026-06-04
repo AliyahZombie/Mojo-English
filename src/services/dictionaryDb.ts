@@ -146,6 +146,24 @@ export async function setCachedNewsArticle(article: EnrichedNewsArticle): Promis
   await db.put(NEWS_ARTICLES_STORE_NAME, article);
 }
 
+export async function searchCachedNewsArticlesByTitle(title: string, limit = 5): Promise<EnrichedNewsArticle[]> {
+  const normalizedQuery = title.trim().toLowerCase();
+  if (!normalizedQuery) return [];
+  const db = await getDb();
+  const results: EnrichedNewsArticle[] = [];
+  let cursor = await db.transaction(NEWS_ARTICLES_STORE_NAME).store.openCursor();
+
+  while (cursor && results.length < limit) {
+    const article = cursor.value;
+    if (article.title.toLowerCase().includes(normalizedQuery)) {
+      results.push(article);
+    }
+    cursor = await cursor.continue();
+  }
+
+  return results;
+}
+
 export async function getCachedNewsFeedPage(key: string): Promise<CachedNewsFeedPage | undefined> {
   const db = await getDb();
   return db.get(NEWS_FEED_PAGES_STORE_NAME, key);
@@ -172,7 +190,7 @@ export async function recordNewsDomainFailure(domain: string): Promise<NewsDomai
   const nextState: NewsDomainHealth = {
     domain,
     consecutiveFailures: nextFailures,
-    blacklistedAt: nextFailures >= 3 ? Date.now() : current?.blacklistedAt || null,
+    blacklistedAt: nextFailures >= 5 ? Date.now() : current?.blacklistedAt || null,
     lastErrorAt: Date.now(),
     lastSuccessAt: current?.lastSuccessAt || null,
   };

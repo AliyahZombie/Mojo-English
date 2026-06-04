@@ -121,8 +121,30 @@ export async function enrichNewsArticle({
     return withRecommendation(nonEnglish, preferences);
   }
 
-  const cleanedParagraphs = await cleanArticleParagraphs(feedItem, rawArticleText);
-  const quiz = await generateArticleQuiz(feedItem, cleanedParagraphs);
+  let cleanedParagraphs: string[];
+  let quiz: NewsQuiz;
+  try {
+    cleanedParagraphs = await cleanArticleParagraphs(feedItem, rawArticleText);
+    quiz = await generateArticleQuiz(feedItem, cleanedParagraphs);
+  } catch {
+    if (sourceDomain) {
+      const domainHealth = await recordNewsDomainFailure(sourceDomain);
+      const fallbackStatus = domainHealth.blacklistedAt ? 'blacklisted-source' : 'failed';
+      const fallback = buildFallbackArticle(feedItem, sourceDomain, fallbackStatus, {
+        detectedLanguage: language.detectedLanguage,
+        isEnglish: true,
+      });
+      await setCachedNewsArticle(fallback);
+      return withRecommendation(fallback, preferences);
+    }
+
+    const fallback = buildFallbackArticle(feedItem, null, 'failed', {
+      detectedLanguage: language.detectedLanguage,
+      isEnglish: true,
+    });
+    await setCachedNewsArticle(fallback);
+    return withRecommendation(fallback, preferences);
+  }
   const enriched: EnrichedNewsArticle = withRecommendation(
     {
       ...feedItem,

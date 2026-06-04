@@ -159,6 +159,15 @@ const buildSourceContextText = (sourceContext?: WritingSourceContext) => {
   ].filter(Boolean).join('\n');
 };
 
+const deriveEssayTitle = (essay: Essay | undefined, text: string, topic: string, untitled: string) => {
+  if (essay?.title && !essay.title.startsWith('Untitled') && !essay.title.startsWith(untitled)) {
+    return essay.title;
+  }
+
+  const firstLine = text.split('\n')[0].substring(0, 30);
+  return firstLine || topic.substring(0, 30) || untitled;
+};
+
 const MOCK_EVALUATE = async (text: string, topic?: string, sourceContext?: WritingSourceContext): Promise<{ score: number, summary: string, annotations: EssayAnnotation[] }> => {
   const { chatCompletion } = await import('../services/llm');
   const sourceContextText = buildSourceContextText(sourceContext);
@@ -260,6 +269,7 @@ export function Writing() {
   const [activeTooltip, setActiveTooltip] = useState<{ x: number, y: number, annotations: EssayAnnotation[] } | null>(null);
 
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const consumedTopicRequestsRef = useRef<Set<string>>(new Set());
 
   // Load active essay or create one
   useEffect(() => {
@@ -289,6 +299,15 @@ export function Writing() {
       sourceType: topicWritingState?.sourceType,
       sourceContent: topicWritingState?.sourceContent,
     };
+    const requestKey = JSON.stringify({
+      locationKey: location.key,
+      topic: incomingTopic,
+      sourceTitle: incomingSourceContext.sourceTitle || '',
+      sourceType: incomingSourceContext.sourceType || '',
+      sourceContent: incomingSourceContext.sourceContent || '',
+    });
+    if (consumedTopicRequestsRef.current.has(requestKey)) return;
+    consumedTopicRequestsRef.current.add(requestKey);
 
     const newEssay: Essay = {
       id: `essay-${Date.now()}`,
@@ -351,12 +370,7 @@ export function Writing() {
     setTimeout(() => {
       setIsSaving(false);
       setLastSaved(new Date());
-      
-      // Don't overwrite manually set titles
-      const firstLine = text.split('\n')[0].substring(0, 30);
-      const titleToSave = activeEssay?.title && !activeEssay.title.startsWith('Untitled') && !activeEssay.title.startsWith(t.untitled)
-        ? activeEssay.title 
-        : (firstLine || trimmedTopic.substring(0, 30) || t.untitled);
+      const titleToSave = deriveEssayTitle(activeEssay, text, trimmedTopic, t.untitled);
         
       updateEssay(activeEssayId, { content: text, topic: trimmedTopic || undefined, updatedAt: Date.now(), title: titleToSave });
     }, 500);
@@ -393,6 +407,7 @@ export function Writing() {
         sourceContent: sourceContext.sourceContent || activeEssay?.sourceContent,
       };
       const result = await MOCK_EVALUATE(text, trimmedTopic || activeEssay?.topic, evaluationSourceContext);
+      const titleToSave = deriveEssayTitle(activeEssay, text, trimmedTopic, t.untitled);
       
       const newEvaluationMessage = {
         id: Date.now().toString(),
@@ -413,7 +428,9 @@ export function Writing() {
       };
 
       updateEssay(activeEssayId, {
+        content: text,
         updatedAt: Date.now(),
+        title: titleToSave,
         evaluationScore: result.score,
         evaluationSummary: result.summary,
         topic: trimmedTopic || undefined,
