@@ -30,6 +30,7 @@ const taskLabelKeys: Record<LlmTask, keyof typeof translations.en> = {
   'article-parsing': 'taskArticleParsing',
   'dictionary-lookup': 'taskDictionaryLookup',
   'writing-evaluation': 'taskWritingEvaluation',
+  'writing-topic-generation': 'taskWritingTopicGeneration',
   'news-optimization': 'taskNewsOptimization',
   'quiz-evaluation': 'taskQuizEvaluation',
   'story-generation': 'taskStoryGeneration'

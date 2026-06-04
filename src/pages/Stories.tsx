@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { BookOpenText, ChevronLeft, Loader2, Sparkles, Trash2 } from 'lucide-react';
+import { BookOpenText, ChevronLeft, Loader2, PenLine, Sparkles, Trash2 } from 'lucide-react';
 import { useAppStore, type Story } from '../store/useAppStore';
 import { getLocalDateString, useFsrsStore } from '../store/useFsrsStore';
 import { translations } from '../lib/i18n';
 import { streamStoryFromWords } from '../services/storyService';
+import { generateWritingTopic } from '../services/writingTopicService';
 import { ChatAssistant } from '../components/ChatAssistant';
 import { cn } from '../lib/utils';
 
@@ -64,11 +65,13 @@ function HighlightedMarkdown({ content, words }: { content: string; words: strin
 }
 
 export function Stories() {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { stories, addStory, deleteStory, language, activeDeckId, storyPrompt, showAlert, isAssistantOpen, toggleAssistant } = useAppStore();
   const dailyStats = useFsrsStore(state => state.dailyStats);
   const t = translations[language];
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isGeneratingTopic, setIsGeneratingTopic] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [streamedContent, setStreamedContent] = useState('');
   const hasHandledGenerateParamRef = useRef(false);
@@ -115,6 +118,35 @@ export function Stories() {
       setErrorMessage(message);
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleStartTopicWriting = async () => {
+    if (!selectedStory || isGeneratingTopic) return;
+
+    setIsGeneratingTopic(true);
+    try {
+      const generatedTopic = await generateWritingTopic({
+        source: 'story',
+        title: selectedStory.title,
+        content: selectedStory.content,
+        language,
+      });
+      navigate('/writing', {
+        state: {
+          topic: generatedTopic,
+          sourceTitle: selectedStory.title,
+          sourceType: 'story',
+          sourceContent: selectedStory.content,
+        },
+      });
+    } catch (error) {
+      showAlert({
+        title: t.writingTopicFailed,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsGeneratingTopic(false);
     }
   };
 
@@ -217,6 +249,18 @@ export function Stories() {
 
           <div className="prose prose-slate max-w-none dark:prose-invert prose-headings:tracking-tight prose-p:leading-8 prose-li:leading-8">
             <HighlightedMarkdown content={selectedStory.content} words={selectedStory.words} />
+          </div>
+
+          <div className="mt-8 rounded-3xl border border-amber-100 bg-amber-50/70 p-5 dark:border-amber-900/40 dark:bg-amber-950/20">
+            <p className="mb-4 text-base font-bold text-slate-800 dark:text-slate-100">{t.interestedWriteSomething}</p>
+            <button
+              onClick={handleStartTopicWriting}
+              disabled={isGeneratingTopic}
+              className="inline-flex items-center gap-2 rounded-2xl bg-amber-500 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-amber-500/20 transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isGeneratingTopic ? <Loader2 size={18} className="animate-spin" /> : <PenLine size={18} />}
+              {isGeneratingTopic ? t.generatingWritingTopic : t.startTopicWriting}
+            </button>
           </div>
         </article>
         </motion.div>

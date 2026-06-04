@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import type { EssayAnnotation } from './useAppStore';
 
 export interface ChatMessage {
   id: string;
@@ -12,8 +13,12 @@ export interface ChatMessage {
   evaluation?: {
     score: number;
     summary: string;
-    annotations: any[];
+    annotations: EssayAnnotation[];
     contentSnapshot: string;
+    topic?: string;
+    sourceTitle?: string;
+    sourceType?: 'story' | 'news';
+    sourceContent?: string;
   };
 }
 

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Save, Check, FileText, Plus, X, Wand2, Maximize2, Minimize2 } from 'lucide-react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore, Essay, EssayAnnotation } from '../store/useAppStore';
 import { useChatStore } from '../store/useChatStore';
 import { ChatAssistant } from '../components/ChatAssistant';
@@ -28,6 +29,16 @@ interface RawEvaluationResult {
   score?: unknown;
   summary?: unknown;
   annotations?: unknown;
+}
+
+interface WritingSourceContext {
+  sourceTitle?: string;
+  sourceType?: 'story' | 'news';
+  sourceContent?: string;
+}
+
+interface TopicWritingLocationState extends WritingSourceContext {
+  topic: string;
 }
 
 const ANNOTATION_TYPES: AnnotationType[] = ['grammar', 'vocabulary', 'style'];
@@ -117,10 +128,44 @@ const getErrorMessage = (error: unknown): string => {
   return error instanceof Error ? error.message : String(error);
 };
 
-const MOCK_EVALUATE = async (text: string): Promise<{ score: number, summary: string, annotations: EssayAnnotation[] }> => {
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null;
+};
+
+const isSourceType = (value: unknown): value is 'story' | 'news' => {
+  return value === 'story' || value === 'news';
+};
+
+const getTopicWritingLocationState = (value: unknown): TopicWritingLocationState | null => {
+  if (!isRecord(value) || typeof value.topic !== 'string' || !value.topic.trim()) {
+    return null;
+  }
+
+  return {
+    topic: value.topic.trim(),
+    sourceTitle: typeof value.sourceTitle === 'string' && value.sourceTitle.trim() ? value.sourceTitle.trim() : undefined,
+    sourceType: isSourceType(value.sourceType) ? value.sourceType : undefined,
+    sourceContent: typeof value.sourceContent === 'string' && value.sourceContent.trim() ? value.sourceContent.trim() : undefined,
+  };
+};
+
+const buildSourceContextText = (sourceContext?: WritingSourceContext) => {
+  if (!sourceContext?.sourceContent?.trim()) return '';
+
+  return [
+    sourceContext.sourceType ? `Source type: ${sourceContext.sourceType}` : '',
+    sourceContext.sourceTitle ? `Source title: ${sourceContext.sourceTitle}` : '',
+    `Original source text:\n${sourceContext.sourceContent.trim()}`,
+  ].filter(Boolean).join('\n');
+};
+
+const MOCK_EVALUATE = async (text: string, topic?: string, sourceContext?: WritingSourceContext): Promise<{ score: number, summary: string, annotations: EssayAnnotation[] }> => {
   const { chatCompletion } = await import('../services/llm');
+  const sourceContextText = buildSourceContextText(sourceContext);
   const systemPrompt = `You are an expert English writing tutor. 
 Evaluate the following text and provide structured feedback in pure JSON format (without markdown blocks).
+If a writing topic is provided, evaluate how well the essay addresses that topic in addition to grammar, vocabulary, style, coherence, and content quality.
+If original source text is provided, also evaluate how well the essay responds to, continues, discusses, or otherwise uses that source context.
 The JSON must have the following schema:
 {
   "score": <number between 0-100 indicating quality>,
@@ -139,7 +184,7 @@ The JSON must have the following schema:
 Do not return character indexes. For each annotation, copy the exact original essay text into originalText so the app can match it locally.
 `;
 
-  const response = await chatCompletion([{ role: 'user', content: `Text to evaluate:\n\n${text}` }], systemPrompt, { task: 'writing-evaluation' });
+  const response = await chatCompletion([{ role: 'user', content: `${topic?.trim() ? `Writing topic:\n${topic.trim()}\n\n` : ''}${sourceContextText ? `${sourceContextText}\n\n` : ''}Text to evaluate:\n\n${text}` }], systemPrompt, { task: 'writing-evaluation' });
 
   // Extract JSON from potential Markdown blocks or reasoning wraps
   let cleanedResponse = response;
@@ -174,6 +219,9 @@ Do not return character indexes. For each annotation, copy the exact original es
 };
 
 export function Writing() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { essays, activeEssayId, addEssay, updateEssay, setActiveEssayId, deleteEssay, language, showAlert } = useAppStore();
   const t = translations[language];
   const evaluationSteps = useMemo(() => [
@@ -185,6 +233,8 @@ export function Writing() {
   ], [t]);
   const { addMessage } = useChatStore();
   const activeEssay = essays.find(e => e.id === activeEssayId);
+  const topicParam = searchParams.get('topic')?.trim() || '';
+  const topicWritingState = useMemo(() => getTopicWritingLocationState(location.state), [location.state]);
 
   const [text, setText] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -197,6 +247,14 @@ export function Writing() {
   
   const { isAssistantOpen, toggleAssistant } = useAppStore();
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [topic, setTopic] = useState('');
+  const [sourceContext, setSourceContext] = useState<WritingSourceContext>({});
+  const currentSourceContext: WritingSourceContext = {
+    sourceTitle: sourceContext.sourceTitle || activeEssay?.sourceTitle,
+    sourceType: sourceContext.sourceType || activeEssay?.sourceType,
+    sourceContent: sourceContext.sourceContent || activeEssay?.sourceContent,
+  };
+  const sourceContextText = buildSourceContextText(currentSourceContext);
   
   // Tooltip state
   const [activeTooltip, setActiveTooltip] = useState<{ x: number, y: number, annotations: EssayAnnotation[] } | null>(null);
@@ -207,12 +265,54 @@ export function Writing() {
   useEffect(() => {
     if (activeEssay) {
       setText(activeEssay.content);
+      setTopic(activeEssay.topic || '');
+      setSourceContext({
+        sourceTitle: activeEssay.sourceTitle,
+        sourceType: activeEssay.sourceType,
+        sourceContent: activeEssay.sourceContent,
+      });
       setIsReviewMode(!!activeEssay.annotations && activeEssay.annotations.length > 0);
     } else {
       setText('');
+      setTopic('');
+      setSourceContext({});
       setIsReviewMode(false);
     }
-  }, [activeEssayId]);
+  }, [activeEssay, activeEssayId]);
+
+  useEffect(() => {
+    const incomingTopic = topicWritingState?.topic || topicParam;
+    if (!incomingTopic) return;
+
+    const incomingSourceContext: WritingSourceContext = {
+      sourceTitle: topicWritingState?.sourceTitle,
+      sourceType: topicWritingState?.sourceType,
+      sourceContent: topicWritingState?.sourceContent,
+    };
+
+    const newEssay: Essay = {
+      id: `essay-${Date.now()}`,
+      title: incomingTopic.substring(0, 60) || `${t.untitled} ${new Date().toLocaleDateString()}`,
+      content: '',
+      topic: incomingTopic,
+      sourceTitle: incomingSourceContext.sourceTitle,
+      sourceType: incomingSourceContext.sourceType,
+      sourceContent: incomingSourceContext.sourceContent,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    addEssay(newEssay);
+    setText('');
+    setTopic(incomingTopic);
+    setSourceContext(incomingSourceContext);
+    setIsReviewMode(false);
+    setShowHistory(false);
+    if (topicWritingState) {
+      navigate('/writing', { replace: true, state: null });
+    } else {
+      setSearchParams({}, { replace: true });
+    }
+  }, [location.key, topicParam, topicWritingState, addEssay, navigate, setSearchParams, t.untitled]);
 
   // Handle manual create
   const handleNewEssay = () => {
@@ -220,17 +320,21 @@ export function Writing() {
       id: Date.now().toString(),
       title: `${t.untitled} ${new Date().toLocaleDateString()}`,
       content: '',
+      topic: '',
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
     addEssay(newEssay);
     setText('');
+    setTopic('');
+    setSourceContext({});
     setIsReviewMode(false);
     setShowHistory(false);
   };
 
   // Initial load
   useEffect(() => {
+    if (topicParam || topicWritingState) return;
     if (essays.length === 0) {
       handleNewEssay();
     } else if (!activeEssayId) {
@@ -239,7 +343,9 @@ export function Writing() {
   }, []);
 
   const handleSave = () => {
-    if (!activeEssayId || !text.trim() || activeEssay?.content === text) return;
+    const trimmedTopic = topic.trim();
+    if (!activeEssayId || (!text.trim() && !trimmedTopic)) return;
+    if (activeEssay?.content === text && (activeEssay.topic || '') === trimmedTopic) return;
     
     setIsSaving(true);
     setTimeout(() => {
@@ -250,9 +356,9 @@ export function Writing() {
       const firstLine = text.split('\n')[0].substring(0, 30);
       const titleToSave = activeEssay?.title && !activeEssay.title.startsWith('Untitled') && !activeEssay.title.startsWith(t.untitled)
         ? activeEssay.title 
-        : (firstLine || t.untitled);
+        : (firstLine || trimmedTopic.substring(0, 30) || t.untitled);
         
-      updateEssay(activeEssayId, { content: text, updatedAt: Date.now(), title: titleToSave });
+      updateEssay(activeEssayId, { content: text, topic: trimmedTopic || undefined, updatedAt: Date.now(), title: titleToSave });
     }, 500);
   };
 
@@ -261,17 +367,17 @@ export function Writing() {
     if (!activeEssayId) return;
     
     // Don't auto-save if content is the same (ignoring first load)
-    if (activeEssay?.content === text) return;
-    if (!text.trim()) return;
+    if (activeEssay?.content === text && (activeEssay.topic || '') === topic.trim()) return;
+    if (!text.trim() && !topic.trim()) return;
 
     const timer = setTimeout(() => {
       handleSave();
     }, 1500);
     return () => clearTimeout(timer);
-  }, [text, activeEssayId]);
+  }, [text, activeEssayId, topic]);
 
   const handleEvaluate = async () => {
-    if (!text.trim() || !activeEssayId) return;
+    if (!activeEssayId || (!text.trim() && !topic.trim())) return;
     setIsEvaluating(true);
     setEvalStep(0);
     
@@ -280,7 +386,13 @@ export function Writing() {
     }, 2500);
 
     try {
-      const result = await MOCK_EVALUATE(text);
+      const trimmedTopic = topic.trim();
+      const evaluationSourceContext: WritingSourceContext = {
+        sourceTitle: sourceContext.sourceTitle || activeEssay?.sourceTitle,
+        sourceType: sourceContext.sourceType || activeEssay?.sourceType,
+        sourceContent: sourceContext.sourceContent || activeEssay?.sourceContent,
+      };
+      const result = await MOCK_EVALUATE(text, trimmedTopic || activeEssay?.topic, evaluationSourceContext);
       
       const newEvaluationMessage = {
         id: Date.now().toString(),
@@ -292,7 +404,11 @@ export function Writing() {
           score: result.score,
           summary: result.summary,
           annotations: result.annotations,
-          contentSnapshot: text
+          contentSnapshot: text,
+          topic: trimmedTopic || activeEssay?.topic,
+          sourceTitle: evaluationSourceContext.sourceTitle,
+          sourceType: evaluationSourceContext.sourceType,
+          sourceContent: evaluationSourceContext.sourceContent,
         }
       };
 
@@ -300,6 +416,10 @@ export function Writing() {
         updatedAt: Date.now(),
         evaluationScore: result.score,
         evaluationSummary: result.summary,
+        topic: trimmedTopic || undefined,
+        sourceTitle: evaluationSourceContext.sourceTitle,
+        sourceType: evaluationSourceContext.sourceType,
+        sourceContent: evaluationSourceContext.sourceContent,
         annotations: result.annotations
       });
       addMessage(`essay_${activeEssayId}`, newEvaluationMessage);
@@ -406,7 +526,7 @@ export function Writing() {
           <div className="flex items-center gap-2 md:gap-3">
             <button
                onClick={handleSave}
-               disabled={isSaving || !text.trim() || activeEssay?.content === text}
+                disabled={isSaving || (!text.trim() && !topic.trim()) || (activeEssay?.content === text && (activeEssay.topic || '') === topic.trim())}
                className="flex items-center gap-1.5 px-3 py-1.5 md:px-4 md:py-2 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 rounded-xl font-medium text-xs md:text-sm border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-50 shrink-0"
             >
                <Save size={14} />
@@ -440,6 +560,41 @@ export function Writing() {
               <p className="text-indigo-700 dark:text-indigo-400 text-sm mt-1">{activeEssay.evaluationSummary}</p>
             </div>
           </div>
+        )}
+
+        {(topic || activeEssay?.topic) && (
+          <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 dark:border-blue-900/40 dark:bg-blue-950/30">
+            <label className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-blue-600 dark:text-blue-400">
+              {t.writingTopic}
+            </label>
+            <p className="whitespace-pre-wrap break-words text-sm font-semibold leading-relaxed text-slate-700 dark:text-slate-200">
+              {topic || activeEssay?.topic || t.writingTopicPlaceholder}
+            </p>
+          </div>
+        )}
+
+        {(sourceContext.sourceContent || activeEssay?.sourceContent) && (
+          <details className="mb-4 rounded-2xl border border-slate-200 bg-white/80 p-4 dark:border-slate-800 dark:bg-slate-900/70">
+            <summary className="cursor-pointer select-none text-xs font-bold uppercase tracking-[0.2em] text-slate-500 transition-colors hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-400">
+              {t.originalSourceText}
+              {(sourceContext.sourceType || activeEssay?.sourceType) && (
+                <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] tracking-normal text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                  {(sourceContext.sourceType || activeEssay?.sourceType) === 'story' ? t.sourceFromStory : t.sourceFromNews}
+                </span>
+              )}
+            </summary>
+            {(sourceContext.sourceTitle || activeEssay?.sourceTitle) && (
+              <p className="mt-3 text-sm font-bold text-slate-800 dark:text-slate-200">
+                {sourceContext.sourceTitle || activeEssay?.sourceTitle}
+              </p>
+            )}
+            <textarea
+              value={sourceContext.sourceContent || activeEssay?.sourceContent || ''}
+              readOnly
+              rows={8}
+              className="mt-3 w-full resize-y rounded-xl border border-slate-100 bg-slate-50/80 p-3 text-sm leading-relaxed text-slate-600 outline-none dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-300"
+            />
+          </details>
         )}
 
         <div className={cn(
@@ -628,7 +783,7 @@ export function Writing() {
           ) : (
             <button 
               onClick={handleEvaluate}
-              disabled={isEvaluating || !text.trim()}
+                  disabled={isEvaluating || (!text.trim() && !topic.trim())}
               className="px-4 py-2.5 md:px-6 md:py-3 rounded-xl md:rounded-2xl font-bold text-white bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 dark:hover:bg-blue-600 shadow-lg shadow-blue-500/20 dark:shadow-none transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isEvaluating ? (
@@ -693,7 +848,7 @@ export function Writing() {
               contextId={`essay_${activeEssayId}`} 
               title={t.writingAssistant}
               description={t.askWritingEvaluations}
-              systemContext={`The user is currently writing/reviewing an essay titled "${activeEssay?.title || t.untitled}". The current text is:\n\n${text}\n\nEvaluations/Annotations (if any): ${JSON.stringify(activeEssay?.annotations)}`}
+              systemContext={`The user is currently writing/reviewing an essay titled "${activeEssay?.title || t.untitled}".${(topic || activeEssay?.topic) ? `\nWriting topic: ${topic || activeEssay?.topic}` : ''}${sourceContextText ? `\n${sourceContextText}` : ''}\nThe current text is:\n\n${text}\n\nEvaluations/Annotations (if any): ${JSON.stringify(activeEssay?.annotations)}`}
               onClose={toggleAssistant}
               className="h-full"
             />
@@ -723,7 +878,7 @@ export function Writing() {
                   contextId={`essay_${activeEssayId}`} 
                   title={t.writingAssistant}
                   description={t.askWriting}
-                  systemContext={`The user is currently writing/reviewing an essay titled "${activeEssay?.title || t.untitled}". The current text is:\n\n${text}\n\nEvaluations/Annotations (if any): ${JSON.stringify(activeEssay?.annotations)}`}
+                  systemContext={`The user is currently writing/reviewing an essay titled "${activeEssay?.title || t.untitled}".${(topic || activeEssay?.topic) ? `\nWriting topic: ${topic || activeEssay?.topic}` : ''}${sourceContextText ? `\n${sourceContextText}` : ''}\nThe current text is:\n\n${text}\n\nEvaluations/Annotations (if any): ${JSON.stringify(activeEssay?.annotations)}`}
                   onClose={toggleAssistant}
                   className="rounded-none border-none shadow-none h-full"
                   isEmbedded={true}
@@ -814,7 +969,7 @@ export function Writing() {
                       )}
                     </div>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mb-2 truncate">
-                      {essay.content || t.noContentYet}
+                      {essay.topic || essay.content || t.noContentYet}
                     </p>
                     <div className="flex justify-between items-center text-[10px] text-slate-400 dark:text-slate-500">
                       <span>{new Date(essay.updatedAt).toLocaleDateString()}</span>

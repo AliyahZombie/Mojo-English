@@ -24,6 +24,7 @@ export type LlmTask =
   | 'article-parsing'
   | 'dictionary-lookup'
   | 'writing-evaluation'
+  | 'writing-topic-generation'
   | 'news-optimization'
   | 'quiz-evaluation'
   | 'story-generation';
@@ -33,6 +34,7 @@ export const LLM_TASK_LABELS: Record<LlmTask, string> = {
   'article-parsing': '文章解析',
   'dictionary-lookup': '查词',
   'writing-evaluation': '作文评估',
+  'writing-topic-generation': '写作题目生成',
   'news-optimization': '新闻界面优化 / 语言过滤',
   'quiz-evaluation': 'Quiz 出题与简答评估',
   'story-generation': 'Story 故事生成',
@@ -65,6 +67,10 @@ export interface ChatMessage {
     summary: string;
     annotations: EssayAnnotation[];
     contentSnapshot: string;
+    topic?: string;
+    sourceTitle?: string;
+    sourceType?: 'story' | 'news';
+    sourceContent?: string;
   };
 }
 
@@ -72,6 +78,10 @@ export interface Essay {
   id: string;
   title: string;
   content: string;
+  topic?: string;
+  sourceTitle?: string;
+  sourceType?: 'story' | 'news';
+  sourceContent?: string;
   createdAt: number;
   updatedAt: number;
   annotations?: EssayAnnotation[];

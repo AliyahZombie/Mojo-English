@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { CheckCircle2, ChevronLeft, Search, BookA, Send, Loader2, RefreshCw, Languages, MessageCircle } from 'lucide-react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { CheckCircle2, ChevronLeft, Search, BookA, Send, Loader2, RefreshCw, Languages, MessageCircle, PenLine } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { cn } from '../lib/utils';
 import { ChatAssistant } from '../components/ChatAssistant';
 import { useAppStore } from '../store/useAppStore';
 import { translations } from '../lib/i18n';
 import { searchDictionary } from '../services/dictionaryApi';
 import { loadNewsFeedPageWithCache, enrichNewsArticle, evaluateNewsShortAnswer } from '../services/newsPipeline';
+import { generateWritingTopic } from '../services/writingTopicService';
 import { getCachedNewsArticle } from '../services/dictionaryDb';
 import type { EnrichedNewsArticle, NewsFeedItem } from '../services/newsTypes';
 import type { NewsQuizArticleState } from '../store/useAppStore';
@@ -21,6 +22,7 @@ type CaretPositionDocument = Document & {
 };
 
 export function News() {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const {
     isAssistantOpen,
@@ -45,6 +47,7 @@ export function News() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [isEvaluatingShortAnswer, setIsEvaluatingShortAnswer] = useState(false);
+  const [isGeneratingTopic, setIsGeneratingTopic] = useState(false);
   const [selectedWord, setSelectedWord] = useState('');
   const [selectedText, setSelectedText] = useState('');
   const [dictionaryResult, setDictionaryResult] = useState<WordDetail | null>(null);
@@ -441,6 +444,33 @@ export function News() {
     }
   };
 
+  const handleStartTopicWriting = async () => {
+    if (!selectedArticle || isGeneratingTopic) return;
+
+    setIsGeneratingTopic(true);
+    try {
+      const sourceContent = selectedArticle.paragraphs.join('\n\n');
+      const generatedTopic = await generateWritingTopic({
+        source: 'news',
+        title: selectedArticle.title,
+        content: sourceContent,
+        language,
+      });
+      navigate('/writing', {
+        state: {
+          topic: generatedTopic,
+          sourceTitle: selectedArticle.title,
+          sourceType: 'news',
+          sourceContent,
+        },
+      });
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsGeneratingTopic(false);
+    }
+  };
+
   const activePreferenceLabel = preferences.length > 0 ? preferences.join(', ') : t.topEnglishHeadlines;
   const dictionaryReturnPath = selectedArticleId ? `/news?article=${selectedArticleId}` : '/news';
 
@@ -650,6 +680,19 @@ export function News() {
                     {t.readOriginalArticle}
                   </a>
                 )}
+              </div>
+
+              <div className="mt-8 rounded-3xl border border-blue-100 bg-blue-50/70 p-5 dark:border-blue-900/40 dark:bg-blue-950/20">
+                <p className="mb-4 text-base font-bold text-slate-800 dark:text-slate-100">{t.interestedWriteSomething}</p>
+                <button
+                  type="button"
+                  onClick={handleStartTopicWriting}
+                  disabled={isGeneratingTopic}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-blue-500/20 transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-600"
+                >
+                  {isGeneratingTopic ? <Loader2 size={18} className="animate-spin" /> : <PenLine size={18} />}
+                  {isGeneratingTopic ? t.generatingWritingTopic : t.startTopicWriting}
+                </button>
               </div>
             </div>
 
