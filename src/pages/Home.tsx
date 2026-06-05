@@ -83,7 +83,7 @@ export function Home() {
     return streak;
   }, [dailyStats]);
   
-  const MOCK_CHART_DATA = useMemo(() => {
+  const weeklyChartData = useMemo(() => {
     const daysEn = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const daysZh = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
     const days = language === 'en' ? daysEn : daysZh;
@@ -245,7 +245,7 @@ export function Home() {
           <h3 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-6 transition-colors">{t.weeklyWordsStudied}</h3>
           <div className="h-64 md:h-80 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={MOCK_CHART_DATA} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+              <LineChart data={weeklyChartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
                 <Line type="monotone" dataKey="words" stroke="#3b82f6" strokeWidth={3} dot={{ r: 4, fill: '#3b82f6', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6 }} />
                 <CartesianGrid stroke="#e2e8f0" strokeDasharray="5 5" vertical={false} />
                 <XAxis dataKey="name" stroke="#94a3b8" tick={{ fill: '#94a3b8' }} tickLine={false} axisLine={false} dy={10} />
