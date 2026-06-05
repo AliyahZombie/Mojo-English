@@ -168,7 +168,7 @@ const deriveEssayTitle = (essay: Essay | undefined, text: string, topic: string,
   return firstLine || topic.substring(0, 30) || untitled;
 };
 
-const MOCK_EVALUATE = async (text: string, topic?: string, sourceContext?: WritingSourceContext): Promise<{ score: number, summary: string, annotations: EssayAnnotation[] }> => {
+const evaluateEssay = async (text: string, topic?: string, sourceContext?: WritingSourceContext): Promise<{ score: number, summary: string, annotations: EssayAnnotation[] }> => {
   const { chatCompletion } = await import('../services/llm');
   const sourceContextText = buildSourceContextText(sourceContext);
   const systemPrompt = `You are an expert English writing tutor. 
@@ -216,8 +216,14 @@ Do not return character indexes. For each annotation, copy the exact original es
   } catch (error) {
     throw new Error(`Failed to parse writing evaluation JSON: ${getErrorMessage(error)}. Response preview: ${cleanedResponse.slice(0, 500)}`);
   }
-  const score = typeof result.score === 'number' ? result.score : 70;
-  const summary = typeof result.summary === 'string' && result.summary.trim() ? result.summary : 'Evaluation complete.';
+  if (typeof result.score !== 'number') {
+    throw new Error('Writing evaluation response is missing numeric score.');
+  }
+  if (typeof result.summary !== 'string' || !result.summary.trim()) {
+    throw new Error('Writing evaluation response is missing summary.');
+  }
+  const score = result.score;
+  const summary = result.summary.trim();
   const annotations = buildMatchedAnnotations(text, result.annotations);
 
   return {
@@ -406,7 +412,7 @@ export function Writing() {
         sourceType: sourceContext.sourceType || activeEssay?.sourceType,
         sourceContent: sourceContext.sourceContent || activeEssay?.sourceContent,
       };
-      const result = await MOCK_EVALUATE(text, trimmedTopic || activeEssay?.topic, evaluationSourceContext);
+      const result = await evaluateEssay(text, trimmedTopic || activeEssay?.topic, evaluationSourceContext);
       const titleToSave = deriveEssayTitle(activeEssay, text, trimmedTopic, t.untitled);
       
       const newEvaluationMessage = {
