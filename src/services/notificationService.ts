@@ -2,6 +2,10 @@ import { useAppStore } from '../store/useAppStore';
 import { Client } from '@upstash/qstash';
 import { getLocalDateString } from '../store/useFsrsStore';
 
+const QSTASH_EU_BASE_URL = 'https://qstash.upstash.io';
+const QSTASH_US_BASE_URL = 'https://qstash-us-east-1.upstash.io';
+const QSTASH_REGION_BASE_URLS = [QSTASH_EU_BASE_URL, QSTASH_US_BASE_URL];
+
 export type ReviewScheduleConfig = {
   daysOfWeek: number[];
   time: string;
@@ -25,6 +29,46 @@ export type NotificationConfigOverride = {
   webhookHeaders: string;
   webhookTemplate: string;
 };
+
+export function getQStashBaseUrl(token: string): string | undefined {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1] ?? token));
+    return typeof payload.Address === 'string' ? payload.Address : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function makeClient(token: string, baseUrl?: string) {
+  return new Client({ token, ...(baseUrl ? { baseUrl } : {}) });
+}
+
+function getQStashBaseUrlCandidates(token: string): string[] {
+  const embeddedBaseUrl = getQStashBaseUrl(token);
+  const candidates = embeddedBaseUrl ? [embeddedBaseUrl, ...QSTASH_REGION_BASE_URLS] : QSTASH_REGION_BASE_URLS;
+  return Array.from(new Set(candidates.map(url => url.replace(/\/$/, ''))));
+}
+
+function isQStashRegionMismatch(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('not found in this region');
+}
+
+export async function withQStashClient<T>(token: string, operation: (client: Client) => Promise<T>): Promise<T> {
+  const baseUrls = getQStashBaseUrlCandidates(token);
+  let lastError: unknown;
+
+  for (const baseUrl of baseUrls) {
+    try {
+      return await operation(makeClient(token, baseUrl));
+    } catch (error) {
+      lastError = error;
+      if (!isQStashRegionMismatch(error)) break;
+    }
+  }
+
+  throw lastError;
+}
 
 export class NotificationService {
   private static getConfig(config?: NotificationConfigOverride) {
@@ -119,20 +163,18 @@ export class NotificationService {
     const { token } = this.getConfig();
     const finalUrl = this.getReplacedUrl();
     const headers = this.getHeaders();
-    
-    const client = new Client({ token });
 
     const body = this.getParsedBody("Word Due Reminder", `Review time for: ${word} is now!`);
     if (!body) return;
 
     try {
-      await client.publishJSON({
+      await withQStashClient(token, client => client.publishJSON({
         url: finalUrl,
         body,
         headers,
         notBefore: Math.floor(dueTime / 1000), // UNIX timestamp
         deduplicationId: `word-due-${word}-${Math.floor(dueTime / 1000)}`
-      });
+      }));
       console.log(`Scheduled word due notification for ${word}`);
     } catch (e) {
       console.error("Failed to schedule word due notification", e);
@@ -151,7 +193,6 @@ export class NotificationService {
     const finalUrl = this.getReplacedUrl();
     const headers = this.getHeaders();
 
-    const client = new Client({ token });
     const dueSecond = Math.floor(dueTimeMs / 1000);
     const dateStr = getLocalDateString(new Date(dueTimeMs));
 
@@ -159,13 +200,13 @@ export class NotificationService {
     if (!body) return;
 
     try {
-      await client.publishJSON({
+      await withQStashClient(token, client => client.publishJSON({
         url: finalUrl,
         body,
         headers,
         notBefore: dueSecond,
         deduplicationId: `batch-due-${dueSecond}`
-      });
+      }));
       console.log(`Scheduled batch due notification for ${dateStr}`);
     } catch (e) {
       console.error("Failed to schedule batch due notification", e);
@@ -178,9 +219,8 @@ export class NotificationService {
   static async listSchedules(config?: NotificationConfigOverride): Promise<ManagedQStashSchedule[]> {
     if (!this.canSend(config)) return [];
     const { token } = this.getConfig(config);
-    const client = new Client({ token });
     try {
-      const schedules = await client.schedules.list();
+      const schedules = await withQStashClient(token, client => client.schedules.list());
       return schedules.map(schedule => ({
         scheduleId: schedule.scheduleId,
         cron: schedule.cron,
@@ -201,9 +241,8 @@ export class NotificationService {
   static async getDailySchedule(config?: NotificationConfigOverride) {
     if (!this.canSend(config)) return null;
     const { token } = this.getConfig(config);
-    const client = new Client({ token });
     try {
-      const res = await client.schedules.get(this.SCHEDULE_ID);
+      const res = await withQStashClient(token, client => client.schedules.get(this.SCHEDULE_ID));
       return res;
     } catch (error) {
       if (error instanceof Error && error.message.includes("not found")) return null;
@@ -217,28 +256,26 @@ export class NotificationService {
     const { token } = this.getConfig(config);
     const finalUrl = this.getReplacedUrl(config);
     const headers = this.getHeaders(config);
-    const client = new Client({ token });
     const cron = this.buildReviewCron(configInput);
 
     const body = this.getParsedBody("Daily Review Reminder", "It's time for your daily English learning session!", config);
     if (!body) throw new Error("Invalid body template");
 
-    await client.schedules.create({
+    await withQStashClient(token, client => client.schedules.create({
       destination: finalUrl,
       scheduleId: this.SCHEDULE_ID,
       cron,
       body: JSON.stringify(body),
       headers,
       label: this.SCHEDULE_LABEL,
-    });
+    }));
   }
 
   static async deleteSchedule(scheduleId: string, config?: NotificationConfigOverride) {
     if (!this.canSend(config)) return;
     const { token } = this.getConfig(config);
-    const client = new Client({ token });
     try {
-      await client.schedules.delete(scheduleId);
+      await withQStashClient(token, client => client.schedules.delete(scheduleId));
     } catch (error) {
       console.error("Failed to delete schedule", error);
     }
@@ -251,12 +288,11 @@ export class NotificationService {
   static async toggleSchedule(scheduleId: string, pause: boolean, config?: NotificationConfigOverride) {
     if (!this.canSend(config)) return;
     const { token } = this.getConfig(config);
-    const client = new Client({ token });
     try {
       if (pause) {
-        await client.schedules.pause({ schedule: scheduleId });
+        await withQStashClient(token, client => client.schedules.pause({ schedule: scheduleId }));
       } else {
-        await client.schedules.resume({ schedule: scheduleId });
+        await withQStashClient(token, client => client.schedules.resume({ schedule: scheduleId }));
       }
     } catch (error) {
       console.error("Failed to toggle schedule", error);
@@ -284,7 +320,6 @@ export class NotificationService {
     const { token } = this.getConfig();
     const finalUrl = this.getReplacedUrl();
     const headers = this.getHeaders();
-    const client = new Client({ token });
 
     const dateStr = getLocalDateString(new Date(dueTimeMs));
 
@@ -292,13 +327,13 @@ export class NotificationService {
     if (!body) return;
 
     try {
-      await client.publishJSON({
+      await withQStashClient(token, client => client.publishJSON({
         url: finalUrl,
         body,
         headers,
         notBefore: Math.floor(dueTimeMs / 1000),
         deduplicationId: `daily-review-${dateStr}`
-      });
+      }));
       console.log(`Scheduled daily review notification for ${dateStr}`);
     } catch (e) {
       console.error("Failed to schedule daily review notification", e);
@@ -313,16 +348,15 @@ export class NotificationService {
     const { token } = this.getConfig();
     const finalUrl = this.getReplacedUrl();
     const headers = this.getHeaders();
-    const client = new Client({ token });
     const body = this.getParsedBody(title, content);
     if (!body) throw new Error("Invalid body template");
 
-    await client.publishJSON({
+    await withQStashClient(token, client => client.publishJSON({
       url: finalUrl,
       body,
       headers,
       notBefore: Math.floor(dueTimeMs / 1000),
       deduplicationId,
-    });
+    }));
   }
 }

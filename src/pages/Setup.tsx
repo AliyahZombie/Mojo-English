@@ -6,8 +6,7 @@ import { Save, Loader2, FileJson, BarChart3, Download, Upload } from 'lucide-rea
 import { cn } from '../lib/utils';
 import { Logo } from '../components/Logo';
 import { translations } from '../lib/i18n';
-import { Client } from '@upstash/qstash';
-import { NotificationService } from '../services/notificationService';
+import { NotificationService, withQStashClient } from '../services/notificationService';
 import { ProviderSettingsSection } from '../components/setup/ProviderSettingsSection';
 import { NotificationSettingsSection } from '../components/setup/NotificationSettingsSection';
 import { ContentPreferencesSection } from '../components/setup/ContentPreferencesSection';
@@ -323,17 +322,16 @@ export function Setup() {
       }
 
       console.log("[QStash Test] Initialize Client with Token");
-      const client = new Client({ token: localQstashToken });
 
       console.log(`[QStash Test] target URL: ${finalUrl}`);
       console.log(`[QStash Test] headers:`, customHeaders);
       console.log(`[QStash Test] body:`, parsedBody);
 
-      const result = await client.publishJSON({
+      const result = await withQStashClient(localQstashToken, client => client.publishJSON({
         url: finalUrl,
         body: parsedBody,
         headers: customHeaders,
-      });
+      }));
 
       console.log("[QStash Test] Publish success:", result);
       useAppStore.getState().showAlert(`${t.qstashTestSuccess}\nMessage ID: ${result.messageId}`);
