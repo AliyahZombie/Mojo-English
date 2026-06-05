@@ -7,7 +7,7 @@ import { ChatAssistant } from '../components/ChatAssistant';
 import { useAppStore } from '../store/useAppStore';
 import { translations } from '../lib/i18n';
 import { searchDictionary } from '../services/dictionaryApi';
-import { loadNewsFeedPageWithCache, enrichNewsArticle, evaluateNewsShortAnswer } from '../services/newsPipeline';
+import { loadNewsFeedPageWithCache, enrichNewsArticle, evaluateNewsShortAnswer, shouldAttemptNewsArticleEnrichment } from '../services/newsPipeline';
 import { generateWritingTopic } from '../services/writingTopicService';
 import { getCachedNewsArticle } from '../services/dictionaryDb';
 import type { EnrichedNewsArticle, NewsFeedItem } from '../services/newsTypes';
@@ -16,6 +16,7 @@ import type { WordDetail } from '../components/WordCard';
 
 type NewsTranslation = typeof translations.en;
 type NewsReadStatus = 'completed' | 'reading' | 'unread';
+const NEWS_ENRICHMENT_CONCURRENCY = 2;
 
 type CaretPositionDocument = Document & {
   caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
@@ -49,6 +50,7 @@ export function News() {
   const [errorMessage, setErrorMessage] = useState('');
   const [isEvaluatingShortAnswer, setIsEvaluatingShortAnswer] = useState(false);
   const [isGeneratingTopic, setIsGeneratingTopic] = useState(false);
+  const [isRetryingQuiz, setIsRetryingQuiz] = useState(false);
   const [selectedWord, setSelectedWord] = useState('');
   const [selectedText, setSelectedText] = useState('');
   const [dictionaryResult, setDictionaryResult] = useState<WordDetail | null>(null);
@@ -233,18 +235,23 @@ export function News() {
       return;
     }
 
-    const toEnrich = orderedItems.slice(0, visibleCount);
-    void Promise.allSettled(
-      toEnrich.map(async (item) => {
-        const existingStatus = articleDetailsById[item.id]?.enrichmentStatus;
+    let cancelled = false;
+    const candidates = orderedItems
+      .slice(0, visibleCount)
+      .filter((item) => shouldAttemptNewsArticleEnrichment(articleDetailsById[item.id]));
+
+    const enrichNextArticle = async () => {
+      while (!cancelled) {
+        const item = candidates.shift();
+        if (!item) {
+          return;
+        }
+
         if (
-          existingStatus === 'ready' ||
-          existingStatus === 'blacklisted-source' ||
-          existingStatus === 'failed' ||
-          existingStatus === 'non-english' ||
+          !shouldAttemptNewsArticleEnrichment(articleDetailsById[item.id]) ||
           pendingEnrichmentIdsRef.current.has(item.id)
         ) {
-          return;
+          continue;
         }
 
         pendingEnrichmentIdsRef.current.add(item.id);
@@ -258,12 +265,22 @@ export function News() {
             tavilyApiKey,
             preferences,
           });
-          setArticleDetailsById((current) => ({ ...current, [item.id]: enriched }));
+          if (!cancelled) {
+            setArticleDetailsById((current) => ({ ...current, [item.id]: enriched }));
+          }
         } finally {
           pendingEnrichmentIdsRef.current.delete(item.id);
         }
-      }),
+      }
+    };
+
+    void Promise.allSettled(
+      Array.from({ length: Math.min(NEWS_ENRICHMENT_CONCURRENCY, candidates.length) }, enrichNextArticle),
     );
+
+    return () => {
+      cancelled = true;
+    };
   }, [articleDetailsById, feedItems, hasTavilyApiKey, orderedItems, preferences, tavilyApiKey, visibleCount, t]);
 
   useEffect(() => {
@@ -430,17 +447,53 @@ export function News() {
     }
   }
 
+  const handleRetryArticleQuiz = async () => {
+    if (!selectedArticleId || !hasTavilyApiKey || isRetryingQuiz) {
+      return;
+    }
+    const item = feedItems.find((entry) => entry.id === selectedArticleId);
+    if (!item) {
+      return;
+    }
+
+    setIsRetryingQuiz(true);
+    setErrorMessage('');
+    setArticleDetailsById((current) => ({
+      ...current,
+      [item.id]: {
+        ...(current[item.id] || buildPlaceholderArticle(item, t)),
+        enrichmentStatus: 'quizing',
+      },
+    }));
+    try {
+      const enriched = await enrichNewsArticle({
+        feedItem: item,
+        tavilyApiKey,
+        preferences,
+        forceRefresh: true,
+      });
+      setArticleDetailsById((current) => ({ ...current, [item.id]: enriched }));
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRetryingQuiz(false);
+    }
+  };
+
   const handleSubmitShortAnswer = async () => {
-    if (!selectedArticle || isEvaluatingShortAnswer) {
+    if (!selectedArticle || !selectedArticle.quiz || isEvaluatingShortAnswer) {
       return;
     }
     setIsEvaluatingShortAnswer(true);
+    setErrorMessage('');
     try {
       const evaluation = await evaluateNewsShortAnswer({ article: selectedArticle, answer: activeQuizState.shortAnswerDraft });
       if (selectedArticleId) {
         setNewsQuizArticleState(selectedArticleId, { shortAnswerEvaluation: evaluation });
         recordNewsCompletion({ articleId: selectedArticleId, title: selectedArticle.title });
       }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setIsEvaluatingShortAnswer(false);
     }
@@ -699,105 +752,128 @@ export function News() {
             </div>
 
             <div className="lg:flex-1 w-full flex flex-col gap-4 md:gap-6 h-fit shrink-0">
-              <div className="bg-blue-50/50 dark:bg-blue-900/10 rounded-2xl md:rounded-3xl p-5 md:p-6 border border-blue-100/50 dark:border-blue-900/30 transition-colors">
-                <h3 className="font-bold text-sm text-blue-600 dark:text-blue-400 mb-6 transition-colors">{t.readingQuiz}</h3>
-                <p className="font-semibold text-slate-700 dark:text-slate-300 mb-4 text-sm leading-relaxed transition-colors">
-                  {selectedArticle.quiz.contentQuestion?.question || `${t.vocabQuestionFallbackBefore} ${selectedArticle.quiz.vocabQuestion.word} ${t.vocabQuestionFallbackAfter}`}
-                </p>
+              {errorMessage && (
+                <div className="rounded-2xl border border-rose-100 bg-rose-50 p-4 text-sm font-medium leading-relaxed text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-300">
+                  {errorMessage}
+                </div>
+              )}
+              {selectedArticle.quiz ? (
+                <>
+                  <div className="bg-blue-50/50 dark:bg-blue-900/10 rounded-2xl md:rounded-3xl p-5 md:p-6 border border-blue-100/50 dark:border-blue-900/30 transition-colors">
+                    <h3 className="font-bold text-sm text-blue-600 dark:text-blue-400 mb-6 transition-colors">{t.readingQuiz}</h3>
+                    <p className="font-semibold text-slate-700 dark:text-slate-300 mb-4 text-sm leading-relaxed transition-colors">
+                      {selectedArticle.quiz.contentQuestion?.question || `${t.vocabQuestionFallbackBefore} ${selectedArticle.quiz.vocabQuestion.word} ${t.vocabQuestionFallbackAfter}`}
+                    </p>
 
-                <div className="space-y-3 mb-6">
-                  {(selectedArticle.quiz.contentQuestion?.options || selectedArticle.quiz.vocabQuestion.options).map((option, index) => {
-                     const correctAnswer = selectedArticle.quiz.contentQuestion?.answer ?? selectedArticle.quiz.vocabQuestion.answer;
-                     const isSelected = activeQuizState.selectedOption === index;
-                     const isCorrect = activeQuizState.answerSubmitted && index === correctAnswer;
-                     const isWrongSelection = activeQuizState.answerSubmitted && isSelected && index !== correctAnswer;
-                     return (
+                    <div className="space-y-3 mb-6">
+                      {(selectedArticle.quiz.contentQuestion?.options || selectedArticle.quiz.vocabQuestion.options).map((option, index) => {
+                         const correctAnswer = selectedArticle.quiz?.contentQuestion?.answer ?? selectedArticle.quiz?.vocabQuestion.answer ?? -1;
+                         const isSelected = activeQuizState.selectedOption === index;
+                         const isCorrect = activeQuizState.answerSubmitted && index === correctAnswer;
+                         const isWrongSelection = activeQuizState.answerSubmitted && isSelected && index !== correctAnswer;
+                         return (
+                         <button
+                           key={index}
+                           onClick={() => {
+                             if (selectedArticleId) {
+                               setNewsQuizArticleState(selectedArticleId, { selectedOption: index });
+                             }
+                           }}
+                           disabled={activeQuizState.answerSubmitted}
+                           className={cn(
+                            'w-full text-left p-4 rounded-xl border transition-all font-medium text-sm',
+                            isCorrect && 'bg-emerald-600 dark:bg-emerald-500 text-white shadow-md border-transparent',
+                            isWrongSelection && 'bg-rose-600 dark:bg-rose-500 text-white shadow-md border-transparent',
+                            !isCorrect && !isWrongSelection && isSelected && 'bg-blue-600 dark:bg-blue-500 text-white shadow-md border-transparent',
+                            !isCorrect && !isWrongSelection && !isSelected && 'bg-white dark:bg-slate-900 border-blue-100 dark:border-slate-800 hover:border-blue-400 dark:hover:border-blue-500 text-slate-700 dark:text-slate-300',
+                          )}
+                        >
+                          <div className="flex justify-between items-center">
+                            <span>{String.fromCharCode(65 + index)}. {option}</span>
+                            {isCorrect ? <CheckCircle2 className="text-white shrink-0 ml-2" size={18} /> : null}
+                          </div>
+                        </button>
+                      );})}
+                    </div>
+
+                     {activeQuizState.answerSubmitted && (
+                       <div className="mb-4 rounded-xl bg-white/70 dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 p-3 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+                         <span className="font-bold text-slate-800 dark:text-slate-100">
+                           {activeQuizState.selectedOption === (selectedArticle.quiz.contentQuestion?.answer ?? selectedArticle.quiz.vocabQuestion.answer) ? `${t.correctFeedback} ` : `${t.notQuiteFeedback} `}
+                         </span>
+                         {selectedArticle.quiz.contentQuestion?.explanation || selectedArticle.quiz.vocabQuestion.explanation}
+                       </div>
+                     )}
+
                      <button
-                       key={index}
                        onClick={() => {
                          if (selectedArticleId) {
-                           setNewsQuizArticleState(selectedArticleId, { selectedOption: index });
+                           setNewsQuizArticleState(selectedArticleId, { answerSubmitted: true });
                          }
                        }}
-                       disabled={activeQuizState.answerSubmitted}
-                       className={cn(
-                        'w-full text-left p-4 rounded-xl border transition-all font-medium text-sm',
-                        isCorrect && 'bg-emerald-600 dark:bg-emerald-500 text-white shadow-md border-transparent',
-                        isWrongSelection && 'bg-rose-600 dark:bg-rose-500 text-white shadow-md border-transparent',
-                        !isCorrect && !isWrongSelection && isSelected && 'bg-blue-600 dark:bg-blue-500 text-white shadow-md border-transparent',
-                        !isCorrect && !isWrongSelection && !isSelected && 'bg-white dark:bg-slate-900 border-blue-100 dark:border-slate-800 hover:border-blue-400 dark:hover:border-blue-500 text-slate-700 dark:text-slate-300',
-                      )}
-                    >
-                      <div className="flex justify-between items-center">
-                        <span>{String.fromCharCode(65 + index)}. {option}</span>
-                        {isCorrect ? <CheckCircle2 className="text-white shrink-0 ml-2" size={18} /> : null}
-                      </div>
+                       disabled={activeQuizState.selectedOption === null}
+                       className="w-full bg-white dark:bg-slate-900 border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 font-bold py-3 rounded-xl hover:border-blue-400 dark:hover:border-blue-500 transition-colors text-sm"
+                     >
+                       {t.checkAnswer}
                     </button>
-                  );})}
-                </div>
+                  </div>
 
-                 {activeQuizState.answerSubmitted && (
-                   <div className="mb-4 rounded-xl bg-white/70 dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 p-3 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-                     <span className="font-bold text-slate-800 dark:text-slate-100">
-                       {activeQuizState.selectedOption === (selectedArticle.quiz.contentQuestion?.answer ?? selectedArticle.quiz.vocabQuestion.answer) ? `${t.correctFeedback} ` : `${t.notQuiteFeedback} `}
-                     </span>
-                     {selectedArticle.quiz.contentQuestion?.explanation || selectedArticle.quiz.vocabQuestion.explanation}
-                   </div>
-                 )}
+                  <div className="bg-blue-50/50 dark:bg-blue-900/10 rounded-2xl md:rounded-3xl p-5 md:p-6 border border-blue-100/50 dark:border-blue-900/30 transition-colors">
+                    <h3 className="font-bold text-sm text-blue-600 dark:text-blue-400 mb-4 transition-colors">{t.comprehension}</h3>
+                    <p className="font-semibold text-slate-700 dark:text-slate-300 mb-4 text-sm leading-relaxed transition-colors">
+                      {selectedArticle.quiz.shortAnswer?.question || selectedArticle.quiz.compQuestion}
+                    </p>
 
-                 <button
-                   onClick={() => {
-                     if (selectedArticleId) {
-                       setNewsQuizArticleState(selectedArticleId, { answerSubmitted: true });
-                     }
-                   }}
-                   disabled={activeQuizState.selectedOption === null}
-                   className="w-full bg-white dark:bg-slate-900 border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 font-bold py-3 rounded-xl hover:border-blue-400 dark:hover:border-blue-500 transition-colors text-sm"
-                 >
-                   {t.checkAnswer}
-                </button>
-              </div>
+                     <div className="relative mt-2">
+                       <textarea
+                         value={activeQuizState.shortAnswerDraft}
+                         onChange={(event) => {
+                           if (selectedArticleId) {
+                             setNewsQuizArticleState(selectedArticleId, { shortAnswerDraft: event.target.value });
+                           }
+                         }}
+                         placeholder={t.shortAnswerPlaceholder}
+                         className="w-full bg-white/60 dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl p-4 min-h-[120px] outline-none focus:border-blue-400 dark:focus:border-blue-500 text-sm placeholder:text-slate-400 dark:placeholder:text-slate-500 text-slate-700 dark:text-slate-200 resize-none transition-colors"
+                       />
+                      <button
+                         type="button"
+                         onClick={() => void handleSubmitShortAnswer()}
+                         disabled={isEvaluatingShortAnswer || !activeQuizState.shortAnswerDraft.trim()}
+                         className="absolute bottom-3 right-3 w-8 h-8 rounded-lg bg-blue-500 dark:bg-blue-600 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white flex items-center justify-center hover:bg-blue-600 dark:hover:bg-blue-700 transition-colors shadow-sm disabled:cursor-not-allowed"
+                       >
+                         {isEvaluatingShortAnswer ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                       </button>
+                     </div>
 
-              <div className="bg-blue-50/50 dark:bg-blue-900/10 rounded-2xl md:rounded-3xl p-5 md:p-6 border border-blue-100/50 dark:border-blue-900/30 transition-colors">
-                <h3 className="font-bold text-sm text-blue-600 dark:text-blue-400 mb-4 transition-colors">{t.comprehension}</h3>
-                <p className="font-semibold text-slate-700 dark:text-slate-300 mb-4 text-sm leading-relaxed transition-colors">
-                  {selectedArticle.quiz.shortAnswer?.question || selectedArticle.quiz.compQuestion}
-                </p>
-
-                 <div className="relative mt-2">
-                   <textarea
-                     value={activeQuizState.shortAnswerDraft}
-                     onChange={(event) => {
-                       if (selectedArticleId) {
-                         setNewsQuizArticleState(selectedArticleId, { shortAnswerDraft: event.target.value });
-                       }
-                     }}
-                     placeholder={t.shortAnswerPlaceholder}
-                     className="w-full bg-white/60 dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl p-4 min-h-[120px] outline-none focus:border-blue-400 dark:focus:border-blue-500 text-sm placeholder:text-slate-400 dark:placeholder:text-slate-500 text-slate-700 dark:text-slate-200 resize-none transition-colors"
-                   />
+                     {activeQuizState.shortAnswerEvaluation && (
+                       <div className={cn(
+                         'mt-4 rounded-xl border p-4 text-sm leading-relaxed',
+                         activeQuizState.shortAnswerEvaluation.isCorrect
+                           ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-100 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-200'
+                           : 'bg-amber-50 dark:bg-amber-900/20 border-amber-100 dark:border-amber-900/40 text-amber-800 dark:text-amber-200',
+                       )}>
+                         <div className="font-bold mb-1">{t.score}: {activeQuizState.shortAnswerEvaluation.score}/100</div>
+                         <p>{activeQuizState.shortAnswerEvaluation.feedback}</p>
+                         <p className="mt-2 text-xs opacity-80"><span className="font-bold">{t.sample}:</span> {activeQuizState.shortAnswerEvaluation.sampleAnswer}</p>
+                       </div>
+                     )}
+                  </div>
+                </>
+              ) : (
+                <div className="bg-blue-50/50 dark:bg-blue-900/10 rounded-2xl md:rounded-3xl p-5 md:p-6 border border-blue-100/50 dark:border-blue-900/30 transition-colors">
+                  <h3 className="font-bold text-sm text-blue-600 dark:text-blue-400 mb-3 transition-colors">{t.readingQuiz}</h3>
+                  <p className="text-sm leading-relaxed text-slate-500 dark:text-slate-400">{t.quizUnavailable}</p>
                   <button
-                     type="button"
-                     onClick={() => void handleSubmitShortAnswer()}
-                     disabled={isEvaluatingShortAnswer || !activeQuizState.shortAnswerDraft.trim()}
-                     className="absolute bottom-3 right-3 w-8 h-8 rounded-lg bg-blue-500 dark:bg-blue-600 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white flex items-center justify-center hover:bg-blue-600 dark:hover:bg-blue-700 transition-colors shadow-sm disabled:cursor-not-allowed"
-                   >
-                     {isEvaluatingShortAnswer ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-                   </button>
-                 </div>
-
-                 {activeQuizState.shortAnswerEvaluation && (
-                   <div className={cn(
-                     'mt-4 rounded-xl border p-4 text-sm leading-relaxed',
-                     activeQuizState.shortAnswerEvaluation.isCorrect
-                       ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-100 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-200'
-                       : 'bg-amber-50 dark:bg-amber-900/20 border-amber-100 dark:border-amber-900/40 text-amber-800 dark:text-amber-200',
-                   )}>
-                     <div className="font-bold mb-1">{t.score}: {activeQuizState.shortAnswerEvaluation.score}/100</div>
-                     <p>{activeQuizState.shortAnswerEvaluation.feedback}</p>
-                     <p className="mt-2 text-xs opacity-80"><span className="font-bold">{t.sample}:</span> {activeQuizState.shortAnswerEvaluation.sampleAnswer}</p>
-                   </div>
-                 )}
-              </div>
+                    type="button"
+                    onClick={() => void handleRetryArticleQuiz()}
+                    disabled={!hasTavilyApiKey || isRetryingQuiz}
+                    className="mt-4 inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-4 py-2 text-sm font-bold text-blue-600 transition-colors hover:border-blue-400 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-800 dark:bg-slate-900 dark:text-blue-400 dark:hover:border-blue-500"
+                  >
+                    {isRetryingQuiz ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                    {isRetryingQuiz ? t.retryingQuiz : t.retryQuiz}
+                  </button>
+                </div>
+              )}
             </div>
 
             <AnimatePresence>
@@ -999,36 +1075,7 @@ function buildPlaceholderArticle(item: NewsFeedItem, t: NewsTranslation): Enrich
     ...item,
     paragraphs: [item.excerpt],
     readTime: t.preview,
-    quiz: {
-      vocabQuestion: {
-        word: item.keywords[0]?.toLowerCase() || 'context',
-        options: [
-          'A key clue from the article context.',
-          'A person mentioned by the source.',
-          'A date from the report.',
-          'A location cited in the article.',
-        ],
-        answer: 0,
-        explanation: 'Use the article preview to infer the word from context.',
-      },
-      compQuestion: `What is the key update in "${item.title}"?`,
-      contentQuestion: {
-        question: `Which statement best captures the key update in "${item.title}"?`,
-        options: [
-          'The article reports the central development described in the headline.',
-          'The article is mainly a weather forecast.',
-          'The article is only an advertisement.',
-          'The article focuses on unrelated entertainment gossip.',
-        ],
-        answer: 0,
-        explanation: 'Use the headline and preview to identify the main development.',
-      },
-      shortAnswer: {
-        question: `Summarize the key update in "${item.title}" in one sentence.`,
-        expectedAnswer: `A good answer identifies the main update in "${item.title}" and mentions one supporting detail from the preview or article.`,
-        rubric: ['Mentions the main update.', 'Includes a supporting detail.', 'Avoids adding outside facts.'],
-      },
-    },
+    quiz: null,
     recommendationScore: 0,
     enrichmentStatus: 'idle',
     sourceDomain: item.link ? tryGetDomain(item.link) : null,

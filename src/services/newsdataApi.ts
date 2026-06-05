@@ -85,7 +85,7 @@ export async function fetchNewsFeedPage({
   }
 
   const response = await fetch(url.toString());
-  const data = (await response.json()) as NewsDataResponse;
+  const data = await readJsonResponse<NewsDataResponse>(response, 'NewsData.io');
 
   if (!response.ok || data.status === 'error') {
     throw new Error(data.message || `NewsData.io request failed with status ${response.status}`);
@@ -102,10 +102,7 @@ function mapNewsFeedItem(article: NewsDataArticle): NewsFeedItem | null {
     return null;
   }
 
-  const excerpt = (article.description || article.content || '').trim();
-  if (!excerpt) {
-    return null;
-  }
+  const excerpt = (article.description || article.content || article.title).trim();
 
   return {
     id: article.article_id,
@@ -145,4 +142,14 @@ export function formatDate(value?: string): string {
 
 export function titleCase(value: string): string {
   return value.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+async function readJsonResponse<T>(response: Response, serviceName: string): Promise<T> {
+  const responseText = await response.text();
+  try {
+    return JSON.parse(responseText) as T;
+  } catch {
+    const preview = responseText.trim().replace(/\s+/g, ' ').slice(0, 160);
+    throw new Error(`${serviceName} returned an unexpected non-JSON response${response.status ? ` with status ${response.status}` : ''}${preview ? `: ${preview}` : '.'}`);
+  }
 }

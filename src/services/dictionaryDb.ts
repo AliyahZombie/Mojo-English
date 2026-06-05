@@ -11,6 +11,7 @@ const NEWS_FEED_PAGES_STORE_NAME = 'newsFeedPages';
 const NEWS_CRAWL_DOMAINS_STORE_NAME = 'newsCrawlDomains';
 const IMPORT_BATCH_SIZE = 15000;
 const WORD_CACHE_LIMIT = 1000;
+const NEWS_DOMAIN_BLACKLIST_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface DictionarySchema extends DBSchema {
   words: {
@@ -176,7 +177,22 @@ export async function setCachedNewsFeedPage(page: CachedNewsFeedPage): Promise<v
 
 export async function getNewsDomainHealth(domain: string): Promise<NewsDomainHealth | undefined> {
   const db = await getDb();
-  return db.get(NEWS_CRAWL_DOMAINS_STORE_NAME, domain);
+  const domainHealth = await db.get(NEWS_CRAWL_DOMAINS_STORE_NAME, domain);
+  if (!domainHealth?.blacklistedAt) {
+    return domainHealth;
+  }
+
+  if (Date.now() - domainHealth.blacklistedAt < NEWS_DOMAIN_BLACKLIST_TTL_MS) {
+    return domainHealth;
+  }
+
+  const recoveredState: NewsDomainHealth = {
+    ...domainHealth,
+    consecutiveFailures: 0,
+    blacklistedAt: null,
+  };
+  await setNewsDomainHealth(recoveredState);
+  return recoveredState;
 }
 
 export async function setNewsDomainHealth(domainHealth: NewsDomainHealth): Promise<void> {

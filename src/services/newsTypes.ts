@@ -52,7 +52,7 @@ export type NewsEnrichmentStatus =
 export type EnrichedNewsArticle = NewsFeedItem & {
   paragraphs: string[];
   readTime: string;
-  quiz: NewsQuiz;
+  quiz: NewsQuiz | null;
   recommendationScore: number;
   enrichmentStatus: NewsEnrichmentStatus;
   sourceDomain: string | null;
