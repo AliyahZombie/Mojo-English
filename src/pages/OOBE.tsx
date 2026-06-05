@@ -1,22 +1,38 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { ChevronRight, Loader2, ExternalLink, Sun, Moon } from 'lucide-react';
+import { ChevronRight, Loader2, ExternalLink, Sun, Moon, Newspaper } from 'lucide-react';
 import { Logo } from '../components/Logo';
 import { proxyUrl } from '../lib/proxyUrl';
 import { cn } from '../lib/utils';
 import { useAppStore, type Provider } from '../store/useAppStore';
 import type { AssistantReplyStyle } from '../store/useAppStore';
 import { uploadAndParseApkg } from '../services/deckApi';
+import {
+  ECDICT_DOWNLOAD_URL,
+  getDictionaryDownloadSnapshot,
+  importDictionaryFile,
+  startDictionaryDownload,
+  subscribeDictionaryDownload,
+} from '../services/dictionaryDownload';
 import { testProviderConnection } from '../services/llm';
 
-const ECDICT_DOWNLOAD_URL = 'https://ghproxy.aliyahzombie.top/https://raw.githubusercontent.com/skywind3000/ECDICT/refs/heads/master/ecdict.csv';
 const UNITY2_BASE_URL = 'https://unity2.ai/v1';
+const SKIP_COOLDOWN = 3;
 
-const STEPS = ['welcome', 'style', 'llm', 'deck', 'goal', 'ecdict', 'finish'] as const;
+function useSkipCooldown(active: boolean) {
+  const [remaining, setRemaining] = useState(SKIP_COOLDOWN);
+  useEffect(() => {
+    if (!active) return;
+    setRemaining(SKIP_COOLDOWN);
+    const id = setInterval(() => setRemaining(r => r <= 1 ? (clearInterval(id), 0) : r - 1), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+  return remaining;
+}
+
+const STEPS = ['welcome', 'style', 'llm', 'newsdata', 'deck', 'goal', 'ecdict', 'finish'] as const;
 type Step = typeof STEPS[number];
-
-type DictProgress = { status: string; loaded?: number; total?: number; rowsProcessed?: number };
 
 function StepDots({ current }: { current: number }) {
   return (
@@ -45,7 +61,7 @@ export function OOBE() {
   const {
     setAssistantReplyStyle, replaceProviders, setDailyGoal,
     addDeck, activeDeckId, setActiveDeckId, setHasConfigured, decks,
-    theme, toggleTheme
+    theme, toggleTheme, setNewsdataApiKey, setTavilyApiKey
   } = useAppStore();
 
   const [stepIdx, setStepIdx] = useState(0);
@@ -67,6 +83,10 @@ export function OOBE() {
   const [testResult, setTestResult] = useState<'ok' | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
 
+  // newsdata step
+  const [newsdataApiKey, setLocalNewsdataApiKey] = useState('');
+  const [tavilyApiKey, setLocalTavilyApiKey] = useState('');
+
   // deck step
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -75,26 +95,35 @@ export function OOBE() {
   const [goal, setGoal] = useState(10);
 
   // ecdict step
-  const [dictProgress, setDictProgress] = useState<DictProgress | null>(null);
-  const [dictDone, setDictDone] = useState(false);
-  const [dictFailed, setDictFailed] = useState(false);
+  const [dictDownload, setDictDownload] = useState(getDictionaryDownloadSnapshot);
   const dictUploadRef = useRef<HTMLInputElement | null>(null);
-  const ecdictStartedRef = useRef(false);
 
   const step = STEPS[stepIdx];
+  const dictProgress = dictDownload.progress;
+  const dictDone = dictDownload.status === 'done';
+  const dictFailed = dictDownload.status === 'failed';
+
+  const isNewsdataSkip = step === 'newsdata' && !newsdataApiKey.trim() && !tavilyApiKey.trim();
+  const isDeckSkip = step === 'deck' && decks.length === 0;
+  const isEcdictSkip = step === 'ecdict' && dictFailed;
+
+  const newsdataCooldown = useSkipCooldown(isNewsdataSkip);
+  const deckCooldown = useSkipCooldown(isDeckSkip);
+  const ecdictCooldown = useSkipCooldown(isEcdictSkip);
 
   const go = (delta: number) => {
     setDir(delta);
     setStepIdx(i => i + delta);
   };
 
-  // Auto-start ECDICT download when reaching that step
+  // Start ECDICT as soon as OOBE opens so the dedicated step can show live status.
   useEffect(() => {
-    if (step === 'ecdict' && !ecdictStartedRef.current) {
-      ecdictStartedRef.current = true;
-      handleDownloadEcdict();
-    }
-  }, [step]);
+    const unsubscribe = subscribeDictionaryDownload(setDictDownload);
+    startDictionaryDownload().catch(() => {
+      // Failure state is already published for the ECDICT step.
+    });
+    return unsubscribe;
+  }, []);
 
   const buildProvider = (): Provider => {
     const baseUrl = showCustom && customBaseUrl ? customBaseUrl : UNITY2_BASE_URL;
@@ -178,54 +207,19 @@ export function OOBE() {
     }
   };
 
-  const importDictionaryFile = async (file: File) => {
-    const { importDictionaryFromBlob } = await import('../services/dictionaryDb');
-    await importDictionaryFromBlob(file, setDictProgress);
-  };
-
   const handleDownloadEcdict = async () => {
-    setDictFailed(false);
-    setDictDone(false);
-    try {
-      setDictProgress({ status: 'fetching', loaded: 0 });
-      const res = await fetch(ECDICT_DOWNLOAD_URL);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const totalHeader = res.headers.get('content-length');
-      const total = totalHeader ? Number(totalHeader) : undefined;
-      const reader = res.body?.getReader();
-      let blob: Blob;
-      if (!reader) {
-        blob = await res.blob();
-      } else {
-        const chunks: Uint8Array[] = [];
-        let loaded = 0;
-        setDictProgress({ status: 'downloading', loaded, total });
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) { chunks.push(value); loaded += value.byteLength; }
-          setDictProgress({ status: 'downloading', loaded, total });
-        }
-        blob = new Blob(chunks, { type: 'text/csv' });
-      }
-      await importDictionaryFile(new File([blob], 'ecdict.csv', { type: 'text/csv' }));
-      setDictDone(true);
-    } catch {
-      setDictFailed(true);
-    } finally {
-      if (!dictDone) setDictProgress(null);
-    }
+    startDictionaryDownload({ force: true }).catch(() => {
+      // Failure state is already published for the ECDICT step.
+    });
   };
 
   const handleEcdictFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setDictFailed(false);
     try {
       await importDictionaryFile(file);
-      setDictDone(true);
     } catch {
-      setDictFailed(true);
+      // Failure state is already published for the ECDICT step.
     } finally {
       e.target.value = '';
     }
@@ -238,20 +232,31 @@ export function OOBE() {
       const p = buildProvider();
       replaceProviders([p], p.id);
     }
+    if (newsdataApiKey.trim()) setNewsdataApiKey(newsdataApiKey.trim());
+    if (tavilyApiKey.trim()) setTavilyApiKey(tavilyApiKey.trim());
     setHasConfigured(true);
     navigate('/');
   };
 
   const dictProgressLabel = () => {
-    if (!dictProgress) return '';
+    if (!dictProgress) {
+      if (dictDownload.status === 'checking') return '正在检查本地词典状态...';
+      if (dictDownload.status === 'idle') return '准备下载离线词典...';
+      return '';
+    }
+    const downloadedMb = ((dictProgress.loaded ?? 0) / 1024 / 1024).toFixed(1);
+    const totalMb = dictProgress.total ? (dictProgress.total / 1024 / 1024).toFixed(1) : null;
+    if (dictProgress.status === 'fetching') return '正在连接在线词典...';
     if (dictProgress.status === 'fetching' || dictProgress.status === 'downloading') {
-      return `已下载 ${((dictProgress.loaded ?? 0) / 1024 / 1024).toFixed(1)} MB`;
+      return totalMb ? `已下载 ${downloadedMb} / ${totalMb} MB` : `已下载 ${downloadedMb} MB`;
     }
     if (dictProgress.status === 'downloaded') return '下载完成，构建索引中...';
-    if (dictProgress.rowsProcessed) return `构建索引中... ${dictProgress.rowsProcessed.toLocaleString()} 词`;
+    if (dictProgress.status === 'reading') return '正在读取词典文件...';
+    if (dictProgress.status === 'parsing') return `构建索引中... ${(dictProgress.rowsProcessed ?? 0).toLocaleString()} 词`;
     return '处理中...';
   };
 
+  const dictStatusText = dictProgressLabel();
   const canProceedLLM = apiKey.trim().length > 0;
 
   return (
@@ -431,6 +436,64 @@ export function OOBE() {
               </div>
             )}
 
+            {step === 'newsdata' && (
+              <div className="flex flex-col gap-5">
+                <div className="text-center">
+                  <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100">配置新闻 API</h2>
+                  <p className="mt-2 text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
+                    NewsData.io 和 Tavily 对个人用户提供慷慨的免费额度，且无需信用卡。<br />
+                    Mojo 强烈推荐接入这些服务来丰富您的英语学习体验 ✨
+                  </p>
+                </div>
+                <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-100 dark:border-slate-800 flex flex-col gap-4">
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2 text-cyan-500 dark:text-cyan-400">
+                      <Newspaper size={16} />
+                      <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">NewsData.io API Key</span>
+                      <a href="https://newsdata.io/" target="_blank" rel="noopener noreferrer" className="ml-auto text-xs text-blue-500 hover:underline inline-flex items-center gap-0.5">
+                        获取 <ExternalLink size={10} />
+                      </a>
+                    </div>
+                    <input
+                      type="password"
+                      value={newsdataApiKey}
+                      onChange={e => setLocalNewsdataApiKey(e.target.value)}
+                      placeholder="pub_xxxxxxxxxxxxxxxxxxxxx"
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2 text-violet-500 dark:text-violet-400">
+                      <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">Tavily API Key</span>
+                      <a href="https://app.tavily.com/home" target="_blank" rel="noopener noreferrer" className="ml-auto text-xs text-blue-500 hover:underline inline-flex items-center gap-0.5">
+                        获取 <ExternalLink size={10} />
+                      </a>
+                    </div>
+                    <input
+                      type="password"
+                      value={tavilyApiKey}
+                      onChange={e => setLocalTavilyApiKey(e.target.value)}
+                      placeholder="tvly-xxxxxxxxxxxxxxxxxxxxx"
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+                  <p className="text-xs text-slate-400 dark:text-slate-500 text-center">密钥将被安全地储存在本地</p>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => go(-1)} className="flex-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-2xl py-3.5 font-semibold text-sm transition-colors">
+                    返回
+                  </button>
+                  <button
+                    onClick={() => go(1)}
+                    disabled={isNewsdataSkip && newsdataCooldown > 0}
+                    className="flex-[2] bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-2xl py-3.5 font-semibold text-sm transition-colors"
+                  >
+                    {isNewsdataSkip && newsdataCooldown > 0 ? `暂时跳过 (${newsdataCooldown}s)` : isNewsdataSkip ? '暂时跳过' : '继续'}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {step === 'deck' && (
               <div className="flex flex-col gap-6">
                 <div className="text-center">
@@ -460,9 +523,10 @@ export function OOBE() {
                   </button>
                   <button
                     onClick={() => go(1)}
-                    className="flex-[2] bg-blue-600 hover:bg-blue-700 text-white rounded-2xl py-3.5 font-semibold text-sm transition-colors"
+                    disabled={isDeckSkip && deckCooldown > 0}
+                    className="flex-[2] bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-2xl py-3.5 font-semibold text-sm transition-colors"
                   >
-                    {decks.length === 0 ? '暂时跳过' : '继续'}
+                    {isDeckSkip && deckCooldown > 0 ? `暂时跳过 (${deckCooldown}s)` : isDeckSkip ? '暂时跳过' : '继续'}
                   </button>
                 </div>
               </div>
@@ -508,7 +572,10 @@ export function OOBE() {
                     <p className="text-green-600 dark:text-green-400 font-semibold">✓ 词典已准备就绪</p>
                   ) : dictFailed ? (
                     <div className="flex flex-col items-center gap-3 w-full">
-                      <p className="text-red-500 text-sm">下载失败，请手动下载后导入：</p>
+                      <p className="text-red-500 text-sm">
+                        {dictDownload.error ? `下载失败：${dictDownload.error}` : '下载失败，请手动下载后导入：'}
+                      </p>
+                      <p className="text-xs text-slate-400 dark:text-slate-500">可手动下载后导入，或重试自动下载。</p>
                       <a
                         href={ECDICT_DOWNLOAD_URL}
                         target="_blank"
@@ -526,8 +593,8 @@ export function OOBE() {
                   ) : (
                     <div className="flex flex-col items-center gap-3 w-full">
                       <Loader2 size={28} className="animate-spin text-blue-500" />
-                      {dictProgress && (
-                        <p className="text-sm text-slate-600 dark:text-slate-400">{dictProgressLabel()}</p>
+                      {dictStatusText && (
+                        <p className="text-sm text-slate-600 dark:text-slate-400">{dictStatusText}</p>
                       )}
                     </div>
                   )}
@@ -545,10 +612,10 @@ export function OOBE() {
                   </button>
                   <button
                     onClick={() => go(1)}
-                    disabled={!dictDone && !dictFailed}
+                    disabled={(!dictDone && !dictFailed) || (isEcdictSkip && ecdictCooldown > 0)}
                     className="flex-[2] bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-2xl py-3.5 font-semibold text-sm transition-colors"
                   >
-                    {dictFailed ? '跳过' : '继续'}
+                    {isEcdictSkip && ecdictCooldown > 0 ? `跳过 (${ecdictCooldown}s)` : dictFailed ? '跳过' : '继续'}
                   </button>
                 </div>
               </div>
