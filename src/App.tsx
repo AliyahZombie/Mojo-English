@@ -11,6 +11,7 @@ import { Writing } from './pages/Writing';
 import { Dictionary } from './pages/Dictionary';
 import { Decks } from './pages/Decks';
 import { Stories } from './pages/Stories';
+import { SetupNotification } from './pages/SetupNotification';
 import { useAppStore } from './store/useAppStore';
 import { useMojoAnalytics } from './hooks/useMojoAnalytics';
 
@@ -50,6 +51,7 @@ export default function App() {
             <Route path="/dictionary" element={<ProtectedRoute><Dictionary /></ProtectedRoute>} />
             <Route path="/decks" element={<ProtectedRoute><Decks /></ProtectedRoute>} />
             <Route path="/stories" element={<ProtectedRoute><Stories /></ProtectedRoute>} />
+            <Route path="/setupNotification" element={<ProtectedRoute><SetupNotification /></ProtectedRoute>} />
           </Routes>
         </Layout>
       </Router>

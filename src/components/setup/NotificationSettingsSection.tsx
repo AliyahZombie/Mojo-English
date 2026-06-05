@@ -1,4 +1,5 @@
-import { Clock, Loader2, RefreshCw, Settings } from 'lucide-react';
+import { Clock, Loader2, RefreshCw, Settings, Wand2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import type { ManagedQStashSchedule, ReviewScheduleConfig } from '../../services/notificationService';
 import { useAppStore } from '../../store/useAppStore';
 import { translations } from '../../lib/i18n';
@@ -64,6 +65,7 @@ export function NotificationSettingsSection({
 }: NotificationSettingsSectionProps) {
   const { language } = useAppStore();
   const t = translations[language];
+  const navigate = useNavigate();
   const weekdayLabels: Record<number, string> = {
     0: t.sun,
     1: t.mon,
@@ -95,7 +97,14 @@ export function NotificationSettingsSection({
     <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 md:p-8 shadow-sm border border-blue-50 dark:border-slate-800 transition-colors">
       <div className="flex items-center gap-3 mb-6">
         <Settings className="text-emerald-500 dark:text-emerald-400 transition-colors" size={24} />
-        <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 transition-colors">{t.notification}</h2>
+        <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 transition-colors flex-1">{t.notification}</h2>
+        <button
+          onClick={() => navigate('/setupNotification')}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-500/20 transition-colors"
+        >
+          <Wand2 size={13} />
+          交互式配置
+        </button>
       </div>
       <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
         {t.notificationDesc} <br />
