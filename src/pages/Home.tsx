@@ -49,7 +49,7 @@ export function Home() {
   }, [t.quotes]);
 
   useEffect(() => {
-    if (analyticsConsent !== null) return;
+    if (!hasSupabaseAnalyticsConfig || analyticsConsent !== null) return;
 
     showAlert({
       title: t.analyticsConsentTitle,
