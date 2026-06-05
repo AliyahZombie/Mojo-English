@@ -4,6 +4,7 @@ import { Layout } from './components/Layout';
 import { GlobalAlert } from './components/GlobalAlert';
 import { Home } from './pages/Home';
 import { Setup } from './pages/Setup';
+import { OOBE } from './pages/OOBE';
 import { Words } from './pages/Words';
 import { News } from './pages/News';
 import { Writing } from './pages/Writing';
@@ -15,11 +16,11 @@ import { useMojoAnalytics } from './hooks/useMojoAnalytics';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const hasConfigured = useAppStore(state => state.hasConfigured);
-  
+
   if (!hasConfigured) {
-    return <Navigate to="/setup" replace />;
+    return <Navigate to="/oobe" replace />;
   }
-  
+
   return <>{children}</>;
 }
 
@@ -40,7 +41,8 @@ export default function App() {
       <Router>
         <Layout>
           <Routes>
-            <Route path="/setup" element={<Setup />} />
+            <Route path="/oobe" element={<OOBE />} />
+            <Route path="/setup" element={<ProtectedRoute><Setup /></ProtectedRoute>} />
             <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
             <Route path="/words" element={<ProtectedRoute><Words /></ProtectedRoute>} />
             <Route path="/news" element={<ProtectedRoute><News /></ProtectedRoute>} />

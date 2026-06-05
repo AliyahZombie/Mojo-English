@@ -15,6 +15,7 @@ import { GoalThemeSection } from '../components/setup/GoalThemeSection';
 import { NewsApiSettingsSection } from '../components/setup/NewsApiSettingsSection';
 import { createConfigBackup, createZustandPersistValue, getConfigBackupFileName, restoreConfigBackup } from '../services/configBackup';
 import { testProviderConnection } from '../services/llm';
+import { proxyUrl } from '../lib/proxyUrl';
 import type { Provider } from '../store/useAppStore';
 import type { AssistantReplyStyle } from '../store/useAppStore';
 import type { ManagedQStashSchedule, NotificationConfigOverride, ReviewScheduleConfig } from '../services/notificationService';
@@ -385,7 +386,7 @@ export function Setup() {
     try {
       if (provider.type === 'OPENAI') {
         const url = `${(provider.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')}/models`;
-        const res = await fetch(url, {
+        const res = await fetch(proxyUrl(url), {
           headers: { 'Authorization': `Bearer ${provider.apiKey}` }
         });
         const data = await res.json();
@@ -393,8 +394,8 @@ export function Setup() {
           fetched = data.data.map((m: { id: string }) => m.id);
         }
       } else if (provider.type === 'GEMINI') {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${provider.apiKey}`;
-        const res = await fetch(url);
+        const url = `${(provider.baseUrl || 'https://generativelanguage.googleapis.com').replace(/\/$/, '')}/v1beta/models?key=${provider.apiKey}`;
+        const res = await fetch(proxyUrl(url));
         const data = await res.json();
         if (data && data.models) {
           fetched = data.models.map((m: { name: string }) => m.name.replace('models/', ''));

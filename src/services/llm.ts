@@ -1,5 +1,6 @@
 import { useAppStore } from '../store/useAppStore';
 import type { LlmTask, Provider } from '../store/useAppStore';
+import { proxyUrl } from '../lib/proxyUrl';
 
 type ChatCompletionMessage = {
   role: 'user' | 'assistant' | 'system';
@@ -111,7 +112,7 @@ async function providerChatCompletion(
       processedMessages = [{ role: 'system', content: systemPrompt }, ...processedMessages];
     }
 
-    const res = await fetch(endpoint, {
+    const res = await fetch(proxyUrl(endpoint), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -127,7 +128,7 @@ async function providerChatCompletion(
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     return data.choices[0].message.content;
-    
+
   } else if (provider.type === 'GEMINI') {
     const baseUrl = provider.baseUrl || 'https://generativelanguage.googleapis.com';
     const endpoint = `${baseUrl.replace(/\/$/, '')}/v1beta/models/${model}:generateContent?key=${apiKey}`;
@@ -143,7 +144,7 @@ async function providerChatCompletion(
     }
     const requestBody = maxTokens ? { ...body, generationConfig: { maxOutputTokens: maxTokens } } : body;
 
-    const res = await fetch(endpoint, {
+    const res = await fetch(proxyUrl(endpoint), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody)
@@ -157,7 +158,7 @@ async function providerChatCompletion(
     const baseUrl = provider.baseUrl || 'https://api.anthropic.com/v1';
     const endpoint = `${baseUrl.replace(/\/$/, '')}/messages`;
     
-    const res = await fetch(endpoint, {
+    const res = await fetch(proxyUrl(endpoint), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -227,7 +228,7 @@ export async function streamChatCompletion(
       processedMessages = [{ role: 'system', content: systemPrompt }, ...processedMessages];
     }
 
-    const res = await fetch(endpoint, {
+    const res = await fetch(proxyUrl(endpoint), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -271,18 +272,18 @@ export async function streamChatCompletion(
     const body: { contents: typeof formattedMessages; systemInstruction?: { parts: Array<{ text: string }> } } = { contents: formattedMessages };
     if (systemPrompt) body.systemInstruction = { parts: [{ text: systemPrompt }] };
 
-    const res = await fetch(endpoint, {
+    const res = await fetch(proxyUrl(endpoint), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
 
     if (!res.ok) throw new Error(await res.text());
-    
+
     const reader = res.body?.getReader();
     const decoder = new TextDecoder("utf-8");
     if (!reader) return;
-    
+
     let buffer = '';
     while (true) {
       const { done, value } = await reader.read();
@@ -303,8 +304,8 @@ export async function streamChatCompletion(
   } else if (provider.type === 'CLAUDE') {
     const baseUrl = provider.baseUrl || 'https://api.anthropic.com/v1';
     const endpoint = `${baseUrl.replace(/\/$/, '')}/messages`;
-    
-    const res = await fetch(endpoint, {
+
+    const res = await fetch(proxyUrl(endpoint), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

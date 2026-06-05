@@ -40,6 +40,15 @@ function toWordsText(words: string[]): string {
   return words.join('\n');
 }
 
+function shuffleWords(words: string[]): string[] {
+  const shuffled = [...words];
+  for (let i = shuffled.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
 export function Decks() {
   const {
     decks,
@@ -190,7 +199,7 @@ export function Decks() {
     }
   };
 
-  const handleCreateDeckFromTag = async (tag: string, name: string) => {
+  const createDeckFromTag = async (tag: string, name: string, shouldShuffle: boolean) => {
     setIsCreatingFromTag(true);
     try {
       const words = await getWordsByTag(tag);
@@ -198,10 +207,11 @@ export function Decks() {
         showAlert(t.noWordsForTag);
         return;
       }
+      const deckWords = shouldShuffle ? shuffleWords(words) : words;
       const newDeck: Deck = {
         id: `deck-${Date.now()}`,
-        name: `${name} (${tag})`,
-        words,
+        name: `${name} (${tag})${shouldShuffle ? t.shuffledDeckNameSuffix : ''}`,
+        words: deckWords,
         createdAt: Date.now(),
       };
       addDeck(newDeck);
@@ -213,6 +223,22 @@ export function Decks() {
     } finally {
       setIsCreatingFromTag(false);
     }
+  };
+
+  const handleCreateDeckFromTag = (tag: string, name: string) => {
+    showAlert({
+      title: t.tagDeckShuffleTitle,
+      message: t.tagDeckShuffleMessage,
+      isConfirm: true,
+      confirmText: t.tagDeckShuffleConfirm,
+      cancelText: t.tagDeckShuffleCancel,
+      onConfirm: () => {
+        void createDeckFromTag(tag, name, true);
+      },
+      onCancel: () => {
+        void createDeckFromTag(tag, name, false);
+      },
+    });
   };
 
   const getDictionaryProgressLabel = () => {
