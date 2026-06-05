@@ -3,8 +3,6 @@ import { searchOfflineDictionary, EcdictWord, getAiCache, setAiCache } from "./d
 
 function formatOfflineWord(word: EcdictWord): WordDetail {
   // Convert local EcdictWord to WordDetail format
-  const mockDetail = [];
-  
   return {
     id: `dict-${word.word}`,
     word: word.originalWord || word.word,
@@ -17,7 +15,7 @@ function formatOfflineWord(word: EcdictWord): WordDetail {
     exchange: word.exchange,
     collins: parseInt(word.collins) || 0,
     oxford: parseInt(word.oxford) || 0,
-    detail: mockDetail.length > 0 ? mockDetail : undefined
+    detail: undefined
   };
 }
 
@@ -83,7 +81,7 @@ export async function searchDictionary(query: string, options?: { forceAi?: bool
 Return ONLY valid JSON.
 `;
     
-    // Attempt fallback via LLM
+    // Attempt lookup via LLM
     const response = await chatCompletion([{ role: 'user', content: `Word to look up: "${query}"` }], systemPrompt, { task: 'dictionary-lookup' });
     const cleanedResponse = response.replace(/^```json\n?/, '').replace(/```$/, '').trim();
     const result = JSON.parse(cleanedResponse);
@@ -109,20 +107,6 @@ Return ONLY valid JSON.
   } catch (error) {
     console.error("Dictionary lookup failed using LLM", error);
     
-    // Return standard mock if LLM fails or is unconfigured
-    return {
-      id: `dict-${normalizedQuery}`,
-      word: normalizedQuery,
-      phonetic: '',
-      translation: '未能获取此单词的翻译，请检查AI大模型配置',
-      definition: 'Failed to find definition. Please verify your AI provider configuration in Settings.',
-      tag: '',
-      bnc: 0,
-      frq: 0,
-      exchange: '',
-      collins: 0,
-      oxford: 0,
-      detail: []
-    };
+    return null;
   }
 }
