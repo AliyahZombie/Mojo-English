@@ -1,12 +1,13 @@
 import { useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Flame, Clock, Glasses, Target, Newspaper, PenTool, Users, BookA, BookOpenText } from 'lucide-react';
+import { Flame, Clock, Glasses, Target, Newspaper, PenTool, Users, BookA, BookOpenText, Wifi, WifiOff } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppStore } from '../store/useAppStore';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { translations } from '../lib/i18n';
 import { ChatAssistant } from '../components/ChatAssistant';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
 
 const hasSupabaseAnalyticsConfig = Boolean(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
 
@@ -39,6 +40,7 @@ import { getLocalDateString, useFsrsStore } from '../store/useFsrsStore';
 export function Home() {
   const { dailyGoal, language, isAssistantOpen, toggleAssistant, analyticsConsent, analyticsOnlineUsers, setAnalyticsConsent, showAlert, decks, activeDeckId, newsHistoryByDate } = useAppStore();
   const { getDailyStudiedCount, dailyStats } = useFsrsStore();
+  const isOnline = useOnlineStatus();
   const t = translations[language];
   const studiedToday = getDailyStudiedCount();
   const activeDeck = decks.find(deck => deck.id === activeDeckId);
@@ -141,14 +143,31 @@ export function Home() {
         <header className="mb-6 shrink-0">
         <h1 className="text-3xl font-bold mb-1 tracking-tight text-slate-800 dark:text-slate-200 transition-colors">{t.yourProgress}</h1>
         <p className="text-slate-500 dark:text-slate-400 text-sm transition-colors">{randomQuote}</p>
-        {analyticsConsent === true && hasSupabaseAnalyticsConfig && (
-          <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-blue-100/80 dark:border-blue-900/50 bg-blue-50/70 dark:bg-blue-950/30 px-3 py-1.5 text-sm font-medium text-slate-500 dark:text-slate-400 shadow-sm shadow-blue-500/5 transition-colors">
+        <div className="mt-3 flex flex-col items-start gap-2">
+          {analyticsConsent === true && hasSupabaseAnalyticsConfig && (
+            <div className="inline-flex items-center gap-2 rounded-full border border-blue-100/80 dark:border-blue-900/50 bg-blue-50/70 dark:bg-blue-950/30 px-3 py-1.5 text-sm font-medium text-slate-500 dark:text-slate-400 shadow-sm shadow-blue-500/5 transition-colors">
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white dark:bg-slate-900">
+                <Users size={13} className="text-blue-500 dark:text-blue-400" />
+              </span>
+              {t.onlineLearners.replace('{count}', analyticsOnlineUsers.toLocaleString())}
+            </div>
+          )}
+          <div className={cn(
+            "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium shadow-sm transition-colors",
+            isOnline
+              ? "border-emerald-100/80 bg-emerald-50/70 text-slate-500 shadow-emerald-500/5 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-slate-400"
+              : "border-rose-100/80 bg-rose-50/70 text-slate-500 shadow-rose-500/5 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-slate-400"
+          )}>
             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white dark:bg-slate-900">
-              <Users size={13} className="text-blue-500 dark:text-blue-400" />
+              {isOnline ? (
+                <Wifi size={13} className="text-emerald-500 dark:text-emerald-400" />
+              ) : (
+                <WifiOff size={13} className="text-rose-500 dark:text-rose-400" />
+              )}
             </span>
-            {t.onlineLearners.replace('{count}', analyticsOnlineUsers.toLocaleString())}
+            {isOnline ? t.networkOnline : t.networkOffline}
           </div>
-        )}
+        </div>
       </header>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-6">

@@ -188,7 +188,6 @@ export class NotificationService {
         notBefore: Math.floor(dueTime / 1000), // UNIX timestamp
         deduplicationId: `word-due-${word}-${Math.floor(dueTime / 1000)}`
       }));
-      console.log(`Scheduled word due notification for ${word}`);
     } catch (e) {
       console.error("Failed to schedule word due notification", e);
     }
@@ -220,7 +219,6 @@ export class NotificationService {
         notBefore: dueSecond,
         deduplicationId: `batch-due-${dueSecond}`
       }));
-      console.log(`Scheduled batch due notification for ${dateStr}`);
     } catch (e) {
       console.error("Failed to schedule batch due notification", e);
     }
@@ -344,7 +342,6 @@ export class NotificationService {
         notBefore: Math.floor(dueTimeMs / 1000),
         deduplicationId: `daily-review-${dateStr}`
       }));
-      console.log(`Scheduled daily review notification for ${dateStr}`);
     } catch (e) {
       console.error("Failed to schedule daily review notification", e);
     }

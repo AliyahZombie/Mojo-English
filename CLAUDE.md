@@ -17,6 +17,17 @@ npm run clean        # remove dist/
 
 There are no automated tests.
 
+## Non-blocking preview for agents
+
+When a preview is needed for user inspection, do not leave `npm run preview` attached to the agent terminal. First clear only the concrete PIDs listening on `:7888` or `:5174`, then start a detached preview:
+
+```bash
+setsid bash -lc 'cd /home/aliyah/Mojo-English && exec npm run preview -- --host 0.0.0.0 --port 7888 > /tmp/mojo-vite-preview.log 2>&1' </dev/null >/dev/null 2>&1 &
+sleep 8
+ss -ltnp '( sport = :7888 or sport = :5174 )' || true
+curl -I --max-time 5 http://127.0.0.1:7888/
+```
+
 ## Architecture
 
 Mojo is a local-first React 19 + Vite SPA for AI-assisted English learning. All user data lives in browser IndexedDB via `idb`. There is no backend — the only server-side component is a development proxy.

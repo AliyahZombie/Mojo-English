@@ -326,22 +326,14 @@ export function Setup() {
         }
       }
 
-      console.log("[QStash Test] Initialize Client with Token");
-
-      console.log(`[QStash Test] target URL: ${finalUrl}`);
-      console.log(`[QStash Test] headers:`, customHeaders);
-      console.log(`[QStash Test] body:`, parsedBody);
-
       const result = await withQStashClient(localQstashToken, client => client.publishJSON({
         url: finalUrl,
         body: parsedBody,
         headers: customHeaders,
       }));
 
-      console.log("[QStash Test] Publish success:", result);
       useAppStore.getState().showAlert(`${t.qstashTestSuccess}\nMessage ID: ${result.messageId}`);
     } catch (err) {
-      console.error("[QStash Test] Failed error:", err);
       const message = err instanceof Error ? err.message : String(err);
       useAppStore.getState().showAlert(`${t.qstashTestFailed}: ${message}`);
     } finally {

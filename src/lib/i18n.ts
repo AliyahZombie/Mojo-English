@@ -54,6 +54,8 @@ export const translations = {
     dashboardAssistant: 'Dashboard Assistant',
     dashboardAssistantDesc: 'Ask me about your progress',
     onlineLearners: '{count} people are learning with you right now',
+    networkOnline: 'Online',
+    networkOffline: 'Offline',
     
     // Decks
     decksManagement: 'Decks Management',
@@ -555,6 +557,8 @@ export const translations = {
     dashboardAssistant: '仪表盘助手',
     dashboardAssistantDesc: '询问你的学习进度',
     onlineLearners: '有{count}人此刻与你一同学习',
+    networkOnline: '当前在线',
+    networkOffline: '当前离线',
     
     // Decks
     decksManagement: '词书管理',
