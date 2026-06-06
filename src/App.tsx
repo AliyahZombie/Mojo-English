@@ -14,6 +14,7 @@ import { Stories } from './pages/Stories';
 import { SetupNotification } from './pages/SetupNotification';
 import { useAppStore } from './store/useAppStore';
 import { useMojoAnalytics } from './hooks/useMojoAnalytics';
+import { usePwaUpdate } from './hooks/usePwaUpdate';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const hasConfigured = useAppStore(state => state.hasConfigured);
@@ -28,6 +29,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 export default function App() {
   const theme = useAppStore(state => state.theme);
   useMojoAnalytics();
+  usePwaUpdate();
 
   useEffect(() => {
     if (theme === 'dark') {

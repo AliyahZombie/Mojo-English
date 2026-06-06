@@ -1,9 +1,15 @@
 #!/usr/bin/env node
-// Usage: node start-dev.mjs [--no-proxy] [vite args...]
+// Usage:
+//   node start-dev.mjs [--no-proxy] [vite args...]
+//   node start-dev.mjs preview [--no-proxy] [vite preview args...]
 import { spawn } from 'child_process';
 
-const noProxy = process.argv.includes('--no-proxy') || process.env.VITE_NO_PROXY === 'true';
-const viteArgs = process.argv.slice(2).filter(a => a !== '--no-proxy');
+const rawArgs = process.argv.slice(2);
+const viteCommand = rawArgs[0] === 'preview' ? 'preview' : undefined;
+const noProxy = rawArgs.includes('--no-proxy') || process.env.VITE_NO_PROXY === 'true';
+const viteArgs = rawArgs
+  .slice(viteCommand ? 1 : 0)
+  .filter(a => a !== '--no-proxy');
 const childEnv = {
   ...process.env,
   ...(noProxy ? { VITE_NO_PROXY: 'true' } : {}),
@@ -31,7 +37,7 @@ if (!noProxy) {
   });
 }
 
-vite = spawn('npx', ['vite', ...viteArgs], { stdio: 'inherit', env: childEnv });
+vite = spawn('npx', ['vite', ...(viteCommand ? [viteCommand] : []), ...viteArgs], { stdio: 'inherit', env: childEnv });
 vite.on('exit', code => {
   stopChildren();
   process.exit(code ?? 0);
