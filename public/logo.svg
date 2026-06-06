@@ -8,23 +8,27 @@
       <stop offset="0%" stop-color="white" stop-opacity="0.2"/>
       <stop offset="100%" stop-color="white" stop-opacity="0"/>
     </linearGradient>
+    <clipPath id="logo-clip">
+      <rect width="512" height="512" rx="115"/>
+    </clipPath>
   </defs>
-  <!-- Background -->
-  <rect width="512" height="512" rx="115" fill="url(#bg)"/>
-  <rect width="512" height="512" rx="115" fill="url(#glow)"/>
-  <!-- M shape -->
-  <path
-    d="M106 448V192C106 137 151 96 206 96H219C266 96 307 124 320 165C333 124 374 96 421 96H434C489 96 534 141 534 196V448"
-    stroke="white" stroke-width="52" stroke-linecap="round" stroke-linejoin="round" fill="none"
-    transform="translate(-22, 0)"
-  />
-  <path
-    d="M256 176V448"
-    stroke="white" stroke-width="52" stroke-linecap="round" fill="none" opacity="0.7"
-  />
-  <!-- Sparkle -->
-  <path
-    d="M420 48L432 82L466 94L432 106L420 140L408 106L374 94L408 82Z"
-    fill="#fcd34d"
-  />
+  <g clip-path="url(#logo-clip)">
+    <!-- Background -->
+    <rect width="512" height="512" rx="115" fill="url(#bg)"/>
+    <rect width="512" height="512" rx="115" fill="url(#glow)"/>
+    <!-- M shape -->
+    <path
+      d="M84 448V197C84 141 122 96 170 96H181C214 96 244 118 256 153C268 118 298 96 331 96H342C390 96 428 141 428 197V448"
+      stroke="white" stroke-width="52" stroke-linecap="round" stroke-linejoin="round" fill="none"
+    />
+    <path
+      d="M256 176V448"
+      stroke="white" stroke-width="52" stroke-linecap="round" fill="none" opacity="0.7"
+    />
+    <!-- Sparkle -->
+    <path
+      d="M420 48L432 82L466 94L432 106L420 140L408 106L374 94L408 82Z"
+      fill="#fcd34d"
+    />
+  </g>
 </svg>
