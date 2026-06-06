@@ -73,6 +73,7 @@ export interface Deck {
   name: string;
   words: string[];
   createdAt: number;
+  useFrequencyOrder?: boolean;
 }
 
 export interface EssayAnnotation {
@@ -174,6 +175,7 @@ interface AppState {
   newsHistoryByDate: NewsHistoryByDate;
   assistantReplyStyle: AssistantReplyStyle;
   hasSeenAssistantStylePrompt: boolean;
+  hasDismissedNotificationSetupReminder: boolean;
   assistantMemories: AssistantMemoryRecord[];
   assistantSchedules: AssistantScheduleRecord[];
   
@@ -200,7 +202,7 @@ interface AppState {
   clearAlert: () => void;
   setLanguage: (lang: Language) => void;
   addDeck: (deck: Deck) => void;
-  updateDeck: (deckId: string, updates: Partial<Pick<Deck, 'name' | 'words'>>) => void;
+  updateDeck: (deckId: string, updates: Partial<Pick<Deck, 'name' | 'words' | 'useFrequencyOrder'>>) => void;
   addWordToDeck: (deckId: string, word: string) => void;
   setActiveDeckId: (deckId: string | null) => void;
   deleteDeck: (deckId: string) => void;
@@ -214,6 +216,7 @@ interface AppState {
   recordNewsCompletion: (record: Omit<NewsCompletionRecord, 'completedAt'> & { completedAt?: number }) => void;
   setAssistantReplyStyle: (style: AssistantReplyStyle) => void;
   setHasSeenAssistantStylePrompt: (seen: boolean) => void;
+  setHasDismissedNotificationSetupReminder: (dismissed: boolean) => void;
   upsertAssistantMemory: (memory: Omit<AssistantMemoryRecord, 'createdAt' | 'updatedAt'> & { createdAt?: number; updatedAt?: number }) => AssistantMemoryRecord;
   deleteAssistantMemory: (id: string) => void;
   addAssistantSchedule: (schedule: Omit<AssistantScheduleRecord, 'createdAt' | 'status'> & { createdAt?: number; status?: AssistantScheduleRecord['status'] }) => AssistantScheduleRecord;
@@ -268,6 +271,7 @@ export const useAppStore = create<AppState>()(
       newsHistoryByDate: {},
       assistantReplyStyle: 'cute',
       hasSeenAssistantStylePrompt: false,
+      hasDismissedNotificationSetupReminder: false,
       assistantMemories: [],
       assistantSchedules: [],
       isAssistantOpen: false,
@@ -361,6 +365,7 @@ export const useAppStore = create<AppState>()(
       }),
       setAssistantReplyStyle: (style) => set({ assistantReplyStyle: style }),
       setHasSeenAssistantStylePrompt: (seen) => set({ hasSeenAssistantStylePrompt: seen }),
+      setHasDismissedNotificationSetupReminder: (dismissed) => set({ hasDismissedNotificationSetupReminder: dismissed }),
       upsertAssistantMemory: (memory) => {
         const now = Date.now();
         const nextMemory: AssistantMemoryRecord = {
@@ -424,6 +429,7 @@ export const useAppStore = create<AppState>()(
         newsHistoryByDate: state.newsHistoryByDate,
         assistantReplyStyle: state.assistantReplyStyle,
         hasSeenAssistantStylePrompt: state.hasSeenAssistantStylePrompt,
+        hasDismissedNotificationSetupReminder: state.hasDismissedNotificationSetupReminder,
         assistantMemories: state.assistantMemories,
         assistantSchedules: state.assistantSchedules
       })

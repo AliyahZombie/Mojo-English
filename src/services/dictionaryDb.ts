@@ -396,6 +396,35 @@ export async function searchOfflineDictionary(query: string): Promise<EcdictWord
   return null;
 }
 
+export async function getOfflineDictionaryEntries(queries: string[]): Promise<Record<string, EcdictWord>> {
+  const normalizedQueries = Array.from(
+    new Set(
+      queries
+        .map(query => query.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+  const entries: Record<string, EcdictWord> = {};
+  if (normalizedQueries.length === 0) return entries;
+
+  const db = await getDb();
+  for (const word of normalizedQueries) {
+    const cached = wordCache.get(word);
+    if (cached) {
+      entries[word] = cached;
+      continue;
+    }
+
+    const result = await db.get(STORE_NAME, word);
+    if (result) {
+      cacheWord(result);
+      entries[word] = result;
+    }
+  }
+
+  return entries;
+}
+
 export async function importDictionaryFromBlob(
   file: File,
   onProgress?: (progress: { status: string; loaded?: number; total?: number; rowsProcessed?: number }) => void

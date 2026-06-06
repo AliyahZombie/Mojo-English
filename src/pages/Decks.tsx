@@ -34,6 +34,7 @@ interface DeckEditorState {
   deckId?: string;
   name: string;
   wordsText: string;
+  useFrequencyOrder: boolean;
 }
 
 function toWordsText(words: string[]): string {
@@ -77,8 +78,14 @@ export function Decks() {
     });
   }, []);
 
-  const openCreateEditor = () => setEditor({ mode: 'create', name: '', wordsText: '' });
-  const openEditEditor = (deck: Deck) => setEditor({ mode: 'edit', deckId: deck.id, name: deck.name, wordsText: toWordsText(deck.words) });
+  const openCreateEditor = () => setEditor({ mode: 'create', name: '', wordsText: '', useFrequencyOrder: false });
+  const openEditEditor = (deck: Deck) => setEditor({
+    mode: 'edit',
+    deckId: deck.id,
+    name: deck.name,
+    wordsText: toWordsText(deck.words),
+    useFrequencyOrder: Boolean(deck.useFrequencyOrder),
+  });
 
   const handleSaveDeck = () => {
     if (!editor) return;
@@ -95,12 +102,13 @@ export function Decks() {
         name,
         words,
         createdAt: Date.now(),
+        useFrequencyOrder: editor.useFrequencyOrder,
       };
       addDeck(newDeck);
       if (!activeDeckId) setActiveDeckId(newDeck.id);
       showAlert(t.deckCreated);
     } else if (editor.deckId) {
-      updateDeck(editor.deckId, { name, words });
+      updateDeck(editor.deckId, { name, words, useFrequencyOrder: editor.useFrequencyOrder });
       showAlert(t.deckUpdated);
     }
     setEditor(null);
@@ -287,7 +295,17 @@ export function Decks() {
                     <h2 className="truncate text-xl font-bold text-slate-800 dark:text-slate-100">{deck.name}</h2>
                     {activeDeckId === deck.id && <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-600 dark:bg-blue-900/40 dark:text-blue-300">{t.activeDeck}</span>}
                   </div>
-                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{deck.words.length} {t.wordsCount}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <p className="text-sm text-slate-500 dark:text-slate-400">{deck.words.length} {t.wordsCount}</p>
+                    <span className={cn(
+                      'rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider',
+                      deck.useFrequencyOrder
+                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                        : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                    )}>
+                      {deck.useFrequencyOrder ? t.frequencyOrderOn : t.frequencyOrderOff}
+                    </span>
+                  </div>
                   <p className="mt-2 line-clamp-1 text-xs text-slate-400 dark:text-slate-500">{deck.words.slice(0, 16).join(' · ') || t.deckEmpty}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -354,6 +372,18 @@ export function Decks() {
                 <label className="block">
                   <span className="mb-2 block text-sm font-bold text-slate-600 dark:text-slate-300">{t.wordbookName}</span>
                   <input value={editor.name} onChange={(e) => setEditor({ ...editor, name: e.target.value })} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-800 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" placeholder={t.wordbookNamePlaceholder} />
+                </label>
+                <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                  <input
+                    type="checkbox"
+                    checked={editor.useFrequencyOrder}
+                    onChange={(event) => setEditor({ ...editor, useFrequencyOrder: event.target.checked })}
+                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span>
+                    <span className="block text-sm font-bold text-slate-700 dark:text-slate-200">{t.frequencyOrderSetting}</span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">{t.frequencyOrderSettingDesc}</span>
+                  </span>
                 </label>
                 <label className="block">
                   <span className="mb-2 block text-sm font-bold text-slate-600 dark:text-slate-300">{t.wordList}</span>

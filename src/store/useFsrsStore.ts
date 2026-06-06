@@ -42,7 +42,17 @@ interface FsrsState {
   continueSession: () => void;
 }
 
-export const getFsrsCardKey = (deckId: string, word: string) => `${deckId}::${word}`;
+const normalizeFsrsWord = (word: string) => word.trim().toLowerCase();
+
+export const getFsrsCardKey = (_deckId: string, word: string) => normalizeFsrsWord(word);
+
+const getLegacyDeckCardKey = (deckId: string, word: string) => `${deckId}::${normalizeFsrsWord(word)}`;
+
+function getStoredValue<T>(records: Record<string, T>, deckId: string, word: string): T | undefined {
+  const globalKey = getFsrsCardKey(deckId, word);
+  const legacyDeckKey = getLegacyDeckCardKey(deckId, word);
+  return records[globalKey] || records[legacyDeckKey] || records[word];
+}
 
 export const getLocalDateString = (date = new Date()) => {
   const year = date.getFullYear();
@@ -130,12 +140,13 @@ export const useFsrsStore = create<FsrsState>()(
           const migratedCards = { ...state.cards };
           const migratedMasteredWords = { ...state.masteredWords };
           for (const word of words) {
-            const scopedKey = getFsrsCardKey(deckId, word);
-            if (!migratedCards[scopedKey] && migratedCards[word]) {
-              migratedCards[scopedKey] = migratedCards[word];
+            const globalKey = getFsrsCardKey(deckId, word);
+            const legacyDeckKey = getLegacyDeckCardKey(deckId, word);
+            if (!migratedCards[globalKey] && migratedCards[legacyDeckKey]) {
+              migratedCards[globalKey] = migratedCards[legacyDeckKey];
             }
-            if (!migratedMasteredWords[scopedKey] && migratedMasteredWords[word]) {
-              migratedMasteredWords[scopedKey] = migratedMasteredWords[word];
+            if (!migratedMasteredWords[globalKey] && migratedMasteredWords[legacyDeckKey]) {
+              migratedMasteredWords[globalKey] = migratedMasteredWords[legacyDeckKey];
             }
           }
 
@@ -149,8 +160,7 @@ export const useFsrsStore = create<FsrsState>()(
 
       getStoredCard: (deckId: string, word: string) => {
         const state = get();
-        const scopedKey = getFsrsCardKey(deckId, word);
-        const storedCard = state.cards[scopedKey] || state.cards[word];
+        const storedCard = getStoredValue(state.cards, deckId, word);
         return storedCard ? rehydrateCard(storedCard) : undefined;
       },
 
@@ -162,7 +172,7 @@ export const useFsrsStore = create<FsrsState>()(
 
       isWordMastered: (deckId: string, word: string) => {
         const state = get();
-        return !!(state.masteredWords[getFsrsCardKey(deckId, word)] || state.masteredWords[word]);
+        return !!getStoredValue(state.masteredWords, deckId, word);
       },
 
       processReview: (deckId: string, word: string, rating: Rating, now = new Date()) => {
@@ -195,7 +205,6 @@ export const useFsrsStore = create<FsrsState>()(
         const scopedKey = getFsrsCardKey(deckId, word);
         set((state) => ({
           masteredWords: { ...state.masteredWords, [scopedKey]: true },
-          dailyStats: recordDailyStudy(state.dailyStats, scopedKey)
         }));
       },
 
@@ -208,10 +217,9 @@ export const useFsrsStore = create<FsrsState>()(
         let reviewCount = 0;
 
         for (const word of words) {
-          const scopedKey = getFsrsCardKey(deckId, word);
-          if (state.masteredWords[scopedKey]) continue;
+          if (getStoredValue(state.masteredWords, deckId, word)) continue;
 
-          const card = state.cards[scopedKey] || state.cards[word];
+          const card = getStoredValue(state.cards, deckId, word);
           if (!card) {
             newCount++;
           } else {
@@ -240,10 +248,9 @@ export const useFsrsStore = create<FsrsState>()(
         let minDue: number | null = null;
         
         for (const w of words) {
-          const scopedKey = getFsrsCardKey(deckId, w);
-          if (state.masteredWords[scopedKey]) continue;
+          if (getStoredValue(state.masteredWords, deckId, w)) continue;
 
-          const card = state.cards[scopedKey] || state.cards[w];
+          const card = getStoredValue(state.cards, deckId, w);
           if (card && card.state !== State.New && card.due) {
             const dueTime = new Date(card.due).getTime();
             if (dueTime > now) {
@@ -265,10 +272,9 @@ export const useFsrsStore = create<FsrsState>()(
         const newCards: string[] = [];
 
         for (const w of words) {
-          const scopedKey = getFsrsCardKey(deckId, w);
-          if (state.masteredWords[scopedKey]) continue;
+          if (getStoredValue(state.masteredWords, deckId, w)) continue;
 
-          const card = state.cards[scopedKey] || state.cards[w];
+          const card = getStoredValue(state.cards, deckId, w);
           if (!card || card.state === State.New) {
             newCards.push(w);
           } else if (card.state === State.Learning || card.state === State.Relearning) {
@@ -286,8 +292,7 @@ export const useFsrsStore = create<FsrsState>()(
         }
 
         const dueTimeFor = (word: string) => {
-          const scopedKey = getFsrsCardKey(deckId, word);
-          const card = state.cards[scopedKey] || state.cards[word];
+          const card = getStoredValue(state.cards, deckId, word);
           return card?.due ? new Date(card.due).getTime() : 0;
         };
 
