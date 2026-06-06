@@ -187,6 +187,9 @@ export function ChatAssistant({
     const styleInstruction = assistantReplyStyle === 'precise'
       ? 'Reply style: Precise. Use concise, accurate language. Avoid unnecessary decoration.'
       : 'Reply style: Cute. Use a warmer, cuter tone, more emoticons when natural, and often refer to yourself as Mojo, for example “让Mojo来帮你……”.';
+    const now = new Date();
+    const localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const timeInstruction = `Current local time: ${now.toLocaleString()} (${localTimezone}). Current Unix millisecond timestamp: ${now.getTime()}. Use this when calculating Schedule.dueAt.`;
     const toolContract = [
       'You have local app tools. When you need a tool, include exactly one fenced block named mojo_tools at the end of your reply:',
       '```mojo_tools',
@@ -204,6 +207,7 @@ export function ChatAssistant({
     return [
       t.assistantIdentityPrompt,
       styleInstruction,
+      timeInstruction,
       systemContext || t.helpfulAssistantPrompt,
       toolContract,
     ].filter(Boolean).join('\n\n');
