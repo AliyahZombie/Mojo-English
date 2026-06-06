@@ -6,7 +6,7 @@ import { Save, Loader2, FileJson, BarChart3, Download, Upload } from 'lucide-rea
 import { cn } from '../lib/utils';
 import { Logo } from '../components/Logo';
 import { translations } from '../lib/i18n';
-import { NotificationService, withQStashClient } from '../services/notificationService';
+import { NotificationService, QSTASH_CRON_TZ_PREFIX, getLocalTimeZone, withQStashClient } from '../services/notificationService';
 import { ProviderSettingsSection } from '../components/setup/ProviderSettingsSection';
 import { NotificationSettingsSection } from '../components/setup/NotificationSettingsSection';
 import { ContentPreferencesSection } from '../components/setup/ContentPreferencesSection';
@@ -105,6 +105,7 @@ export function Setup() {
   const [scheduleConfig, setScheduleConfig] = useState<ReviewScheduleConfig>({
     daysOfWeek: [1, 2, 3, 4, 5, 6, 0],
     time: '10:00',
+    timezone: getLocalTimeZone(),
   });
   const [scheduleIsLoading, setScheduleIsLoading] = useState(false);
   const [hasSchedule, setHasSchedule] = useState(false);
@@ -134,6 +135,9 @@ export function Setup() {
 
   const deriveScheduleConfigFromCron = (cron: string): ReviewScheduleConfig | null => {
     const parts = cron.trim().split(/\s+/);
+    const timezonePart = parts[0]?.startsWith(QSTASH_CRON_TZ_PREFIX) ? parts.shift() : null;
+    const timezone = timezonePart ? timezonePart.slice(QSTASH_CRON_TZ_PREFIX.length) : 'UTC';
+
     if (parts.length !== 5) return null;
     const [minutePart, hourPart, , , dayPart] = parts;
     const minute = Number(minutePart);
@@ -153,6 +157,7 @@ export function Setup() {
     return {
       daysOfWeek,
       time: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+      timezone: timezone || 'UTC',
     };
   };
 

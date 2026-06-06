@@ -1,6 +1,6 @@
 import { Clock, Loader2, RefreshCw, Settings, Wand2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import type { ManagedQStashSchedule, ReviewScheduleConfig } from '../../services/notificationService';
+import { getLocalTimeZone, type ManagedQStashSchedule, type ReviewScheduleConfig } from '../../services/notificationService';
 import { useAppStore } from '../../store/useAppStore';
 import { translations } from '../../lib/i18n';
 
@@ -66,6 +66,9 @@ export function NotificationSettingsSection({
   const { language } = useAppStore();
   const t = translations[language];
   const navigate = useNavigate();
+  const localTimezone = getLocalTimeZone();
+  const selectedTimezone = scheduleConfig.timezone || localTimezone;
+  const timezoneOptions = Array.from(new Set([selectedTimezone, localTimezone, 'UTC']));
   const weekdayLabels: Record<number, string> = {
     0: t.sun,
     1: t.mon,
@@ -212,7 +215,7 @@ export function NotificationSettingsSection({
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-end gap-4">
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1.5 transition-colors">{t.reminderTime}</label>
                 <input
                   type="time"
@@ -220,6 +223,19 @@ export function NotificationSettingsSection({
                   onChange={(e) => onScheduleConfigChange({ ...scheduleConfig, time: e.target.value })}
                   className="w-full bg-slate-50 dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-200"
                 />
+              </div>
+              <div className="flex-1 min-w-0">
+                <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1.5 transition-colors">{t.reminderTimezone}</label>
+                <select
+                  value={selectedTimezone}
+                  onChange={(e) => onScheduleConfigChange({ ...scheduleConfig, timezone: e.target.value })}
+                  disabled={scheduleIsLoading}
+                  className="w-full bg-slate-50 dark:bg-slate-900/60 border border-blue-100 dark:border-slate-800 rounded-xl px-4 py-3 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-200"
+                >
+                  {timezoneOptions.map(timezone => (
+                    <option key={timezone} value={timezone}>{timezone}</option>
+                  ))}
+                </select>
               </div>
               <button
                 onClick={onCreateSchedule}

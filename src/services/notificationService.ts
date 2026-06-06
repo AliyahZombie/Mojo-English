@@ -5,10 +5,13 @@ import { getLocalDateString } from '../store/useFsrsStore';
 const QSTASH_EU_BASE_URL = 'https://qstash.upstash.io';
 const QSTASH_US_BASE_URL = 'https://qstash-us-east-1.upstash.io';
 const QSTASH_REGION_BASE_URLS = [QSTASH_EU_BASE_URL, QSTASH_US_BASE_URL];
+export const QSTASH_CRON_TZ_PREFIX = 'CRON_TZ=';
+const DEFAULT_DAILY_REVIEW_TIME = '10:00';
 
 export type ReviewScheduleConfig = {
   daysOfWeek: number[];
   time: string;
+  timezone?: string;
 };
 
 export type ManagedQStashSchedule = {
@@ -37,6 +40,15 @@ export function getQStashBaseUrl(token: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function getLocalTimeZone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+}
+
+function getCronTimezone(timezone?: string) {
+  const normalizedTimezone = (timezone || getLocalTimeZone()).trim();
+  return normalizedTimezone && !/\s/.test(normalizedTimezone) ? normalizedTimezone : 'UTC';
 }
 
 function makeClient(token: string, baseUrl?: string) {
@@ -132,11 +144,12 @@ export class NotificationService {
     return !!token && !!webhookUrl;
   }
 
-  static buildReviewCron({ daysOfWeek, time }: ReviewScheduleConfig) {
+  static buildReviewCron({ daysOfWeek, time, timezone }: ReviewScheduleConfig) {
     const [hourPart, minutePart] = time.split(':');
     const hour = Number(hourPart);
     const minute = Number(minutePart);
     const uniqueDays = Array.from(new Set(daysOfWeek)).sort((a, b) => a - b);
+    const cronTimezone = getCronTimezone(timezone);
 
     if (!uniqueDays.length) {
       throw new Error('Please select at least one reminder day');
@@ -148,7 +161,7 @@ export class NotificationService {
       throw new Error('Invalid reminder day selected');
     }
 
-    return `${minute} ${hour} * * ${uniqueDays.join(',')}`;
+    return `${QSTASH_CRON_TZ_PREFIX}${cronTimezone} ${minute} ${hour} * * ${uniqueDays.join(',')}`;
   }
 
   /**
@@ -304,17 +317,14 @@ export class NotificationService {
   }
 
   static async scheduleDailyReview(dueTimeMs: number) {
-    // If we have a CRON schedule, we don't need to manually schedule the daily review after every session.
-    // However, if the user hasn't set up a CRON, we could optionally do a dynamic schedule.
-    // Let's just keep this as a functional fallback, or the user can rely entirely on the CRON.
     if (!this.canSend()) return;
     const now = Date.now();
     if (dueTimeMs <= now) return;
 
-    // Check if there is an active CRON schedule to avoid duplicate notifications
+    // If a recurring schedule exists, respect it even when paused.
     const cronSchedule = await this.getDailySchedule();
-    if (cronSchedule && !cronSchedule.isPaused) {
-        return; // Let the CRON handle it
+    if (cronSchedule) {
+      return;
     }
 
     const { token } = this.getConfig();
@@ -338,6 +348,14 @@ export class NotificationService {
     } catch (e) {
       console.error("Failed to schedule daily review notification", e);
     }
+  }
+
+  static getNextDefaultDailyReviewTime(fromMs = Date.now()) {
+    const [hourPart, minutePart] = DEFAULT_DAILY_REVIEW_TIME.split(':');
+    const next = new Date(fromMs);
+    next.setDate(next.getDate() + 1);
+    next.setHours(Number(hourPart), Number(minutePart), 0, 0);
+    return next.getTime();
   }
 
   static async scheduleAssistantNotification(title: string, content: string, dueTimeMs: number, deduplicationId: string) {
