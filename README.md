@@ -17,8 +17,12 @@ Mojo is an intelligent, open-source English learning web application designed to
   - OpenAI Compatible endpoints
   - Google Gemini
   - Anthropic Claude
-- **Automated Notifications (via QStash):** Never miss a review! Set up daily CRON schedules connecting to your preferred webhook (e.g., Telegram bots, Discord webhooks) using Upstash QStash, sending push notifications reminding you to study.
+- **News Reading:** Fetch and AI-process real news articles (via NewsData.io / Tavily) with vocabulary highlights, short-answer quizzes, and comprehension questions.
+- **Writing Practice:** Open-ended writing exercises with AI feedback.
+- **Stories:** AI-generated reading passages tailored to your level.
+- **Automated Notifications (via QStash):** Never miss a review! Set up daily CRON schedules connecting to your preferred webhook (e.g., Telegram bots, Discord webhooks) using Upstash QStash, sending push notifications reminding you to study. Notification scheduling is configured entirely client-side and routed through the local dev/preview proxy.
 - **Local First & Privacy Friendly:** Utilizes browser IndexedDB (`idb`) to locally store your learning progress and dictionary.
+- **PWA Support:** Installable as a Progressive Web App with update prompts.
 - **Polished UI:** A responsive, dark-mode-ready interface built with Tailwind CSS and Motion.
 
 ### 🚀 Tech Stack
@@ -37,7 +41,7 @@ Mojo is an intelligent, open-source English learning web application designed to
 
 #### Algorithms & AI
 - **ts-fsrs** for the Free Spaced Repetition Scheduler algorithm
-- **Google Gen AI SDK** and native `fetch` support for AI chat streaming
+- **LLM providers:** OpenAI-compatible endpoints, Google Gemini (via Gen AI SDK), and Anthropic Claude — all with streaming support
 
 #### Infrastructure & Services
 - **Upstash QStash** for serverless CRON notifications (`@upstash/qstash`)
@@ -51,12 +55,24 @@ Mojo is an intelligent, open-source English learning web application designed to
 
 2. **Start the Development Server:**
    ```bash
-   npm run dev
+   npm run dev                    # proxy (:5174) + Vite dev server
+   npm run dev -- --no-proxy      # Vite only, no proxy
    ```
 
 3. **Build for Production:**
    ```bash
    npm run build
+   ```
+
+4. **Preview Production Build:**
+   ```bash
+   npm run preview                # build, then proxy + Vite preview (:7888)
+   npm run preview -- --no-proxy  # build and preview without proxy
+   ```
+
+5. **Type-check:**
+   ```bash
+   npm run lint                   # tsc --noEmit (TypeScript only, no ESLint)
    ```
 
 ### ⚙️ Configuration
@@ -76,6 +92,10 @@ You can import any `.apkg` Anki file directly from the UI. The application utili
 
 ---
 
+*Keep your streak alive with Mojo!*
+
+---
+
 <a name="中文"></a>
 ## 中文
 
@@ -89,8 +109,12 @@ Mojo 是一款智能开源英语学习 Web 应用，将先进的间隔重复算�
   - OpenAI 兼容接口
   - Google Gemini
   - Anthropic Claude
-- **自动推送提醒（通过 QStash）：** 使用 Upstash QStash 配置每日定时任务，连接你喜欢的 Webhook（如 Telegram Bot、Discord），到时间自动发送复习提醒。
+- **新闻阅读：** 通过 NewsData.io / Tavily 获取真实新闻并经 AI 处理，带词汇高亮、简答题和理解问题。
+- **写作练习：** 开放式写作题目，附 AI 反馈。
+- **故事：** AI 生成适合你水平的阅读短文。
+- **自动推送提醒（通过 QStash）：** 使用 Upstash QStash 配置每日定时任务，连接你喜欢的 Webhook（如 Telegram Bot、Discord），到时间自动发送复习提醒。通知调度完全在客户端配置，通过本地开发/预览代理转发请求。
 - **本地优先，保护隐私：** 使用浏览器 IndexedDB（`idb`）在本地存储学习进度和词典数据。
+- **PWA 支持：** 可作为渐进式 Web 应用安装，支持更新提示。
 - **精致 UI：** 基于 Tailwind CSS 和 Motion 构建，支持深色模式，界面响应流畅。
 
 ### 🚀 技术栈
@@ -109,7 +133,7 @@ Mojo 是一款智能开源英语学习 Web 应用，将先进的间隔重复算�
 
 #### 算法与 AI
 - **ts-fsrs** 自由间隔重复调度算法
-- **Google Gen AI SDK** 及原生 `fetch` 支持流式 AI 对话
+- **LLM 提供商：** 支持 OpenAI 兼容接口、Google Gemini（通过 Gen AI SDK）和 Anthropic Claude，全部支持流式输出
 
 #### 基础设施
 - **Upstash QStash** 无服务器定时通知
@@ -123,12 +147,24 @@ Mojo 是一款智能开源英语学习 Web 应用，将先进的间隔重复算�
 
 2. **启动开发服务器：**
    ```bash
-   npm run dev
+   npm run dev                    # 代理（:5174）+ Vite 开发服务器
+   npm run dev -- --no-proxy      # 仅 Vite，不启动代理
    ```
 
 3. **生产构建：**
    ```bash
    npm run build
+   ```
+
+4. **预览生产构建：**
+   ```bash
+   npm run preview                # 构建后启动代理 + Vite 预览（:7888）
+   npm run preview -- --no-proxy  # 构建并预览，不启动代理
+   ```
+
+5. **类型检查：**
+   ```bash
+   npm run lint                   # tsc --noEmit（仅 TypeScript，非 ESLint）
    ```
 
 ### ⚙️ 配置
