@@ -9,6 +9,8 @@ npm install          # install dependencies
 npm run dev          # start proxy server + Vite dev server together
 npm run dev -- --no-proxy  # start Vite only, without the proxy
 npm run build        # production build
+npm run preview      # build preview bundle, then start proxy server + Vite preview together
+npm run preview -- --no-proxy  # build and preview without the proxy
 npm run lint         # type-check only (tsc --noEmit), no eslint
 npm run clean        # remove dist/
 ```
@@ -19,9 +21,9 @@ There are no automated tests.
 
 Mojo is a local-first React 19 + Vite SPA for AI-assisted English learning. All user data lives in browser IndexedDB via `idb`. There is no backend — the only server-side component is a development proxy.
 
-### Dev proxy
+### Dev/preview proxy
 
-In development, `proxy-server.mjs` runs on `:5174` and Vite forwards `/api/proxy?target=<url>` requests to it. This prevents CORS issues when calling external LLM APIs directly from the browser. `src/lib/proxyUrl.ts` wraps any external URL with this redirect. In production builds the proxy is absent and `proxyUrl()` is a no-op.
+In development and preview, `proxy-server.mjs` runs on `:5174` and Vite forwards `/api/proxy?target=<url>` requests to it. This prevents CORS issues when calling external LLM APIs directly from the browser. `src/lib/proxyUrl.ts` wraps any external URL with this redirect. `npm run preview` builds the preview bundle with proxy support enabled before serving it; pass `-- --no-proxy` to disable the proxy for either dev or preview. Plain production builds keep the proxy absent and `proxyUrl()` is a no-op.
 
 ### LLM abstraction (`src/services/llm.ts`)
 
